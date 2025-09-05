@@ -40,3 +40,4 @@ build/
 
 # Node (for incidental tooling)
 node_modules/
+outputs/
