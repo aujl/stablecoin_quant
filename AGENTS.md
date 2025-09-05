@@ -33,4 +33,3 @@
 - Offline by default: network adapters are stubs. When adding real HTTP clients, keep keys in env vars (e.g., `MORPHO_API_KEY`) and never commit secrets.
 - Data hygiene: avoid committing large datasets; prefer small samples in `source/` and document sources.
 - Reproducibility: keep demo runnable without credentials; guard network calls behind flags.
-

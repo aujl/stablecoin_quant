@@ -40,7 +40,11 @@ class Pool:
     def to_dict(self) -> dict[str, Any]:
         d = asdict(self)
         # for readability in CSV
-        d["timestamp_iso"] = datetime.fromtimestamp(self.timestamp or 0, tz=UTC).isoformat() if self.timestamp else ""
+        d["timestamp_iso"] = (
+            datetime.fromtimestamp(self.timestamp or 0, tz=UTC).isoformat()
+            if self.timestamp
+            else ""
+        )
         return d
 
 
@@ -192,7 +196,8 @@ class Metrics:
                 apr_avg=("base_apy", "mean"),
                 apr_wavg=(
                     "base_apy",
-                    lambda x: (x * df.loc[x.index, "tvl_usd"]).sum() / df.loc[x.index, "tvl_usd"].sum(),
+                    lambda x: (x * df.loc[x.index, "tvl_usd"]).sum()
+                    / df.loc[x.index, "tvl_usd"].sum(),
                 ),
             )
             .reset_index()
