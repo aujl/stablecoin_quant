@@ -26,6 +26,14 @@ jobs:
           # Install dev tools
           pip install black flake8 mypy pytest pytest-cov autoflake
 
+      - name: Run headless demo (config-driven)
+        env:
+          MPLBACKEND: Agg
+        run: |
+          python src/stable_yield_demo.py configs/demo.toml
+          test -f outputs/pools.csv
+          test -f outputs/by_chain.csv
+
       - name: Run tests with coverage
         run: |
           pytest --cov=stable_yield_lab --cov-report=xml --cov-report=term-missing
