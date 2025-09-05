@@ -15,8 +15,6 @@ from collections.abc import Iterable
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from typing import Any, Protocol
-
-import matplotlib.pyplot as plt
 import pandas as pd
 
 # -----------------
@@ -282,6 +280,16 @@ class Metrics:
 
 class Visualizer:
     @staticmethod
+    def _plt():
+        try:
+            import matplotlib.pyplot as plt
+        except Exception as exc:  # pragma: no cover
+            raise RuntimeError(
+                "matplotlib is required for visualization. Install via Poetry or pip."
+            ) from exc
+        return plt
+
+    @staticmethod
     def bar_apr(
         df: pd.DataFrame,
         title: str = "Netto-APY pro Pool",
@@ -293,6 +301,7 @@ class Visualizer:
     ) -> None:
         if df.empty:
             return
+        plt = Visualizer._plt()
         plt.figure(figsize=(10, 6))
         plt.bar(df[x_col], df[y_col] * 100.0)  # percentage
         plt.title(title)
@@ -322,6 +331,7 @@ class Visualizer:
         if size_col in df.columns:
             # scale bubble sizes
             sizes = (df[size_col].fillna(2.0) * 40).tolist()
+        plt = Visualizer._plt()
         plt.figure(figsize=(10, 6))
         plt.scatter(df[x_col], df[y_col] * 100.0, s=sizes)  # % on y-axis
         if annotate:
@@ -352,6 +362,7 @@ class Visualizer:
     ) -> None:
         if df_group.empty:
             return
+        plt = Visualizer._plt()
         plt.figure(figsize=(8, 5))
         plt.bar(df_group["chain"], df_group["apr_wavg"] * 100.0)
         plt.title(title)
