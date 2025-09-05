@@ -107,12 +107,20 @@ def main() -> None:
             show=show,
         )
     if "scatter" in args.charts:
-        Visualizer.scatter_tvl_apy(
-            df,
-            title="TVL vs Base APY (bubble=risk)",
-            save_path=str(outdir / "scatter_tvl_apy.png") if outdir else None,
-            show=show,
-        )
+        if "volatility" in df.columns:
+            Visualizer.scatter_risk_return(
+                df,
+                title="Volatility vs Base APY (bubble=TVL)",
+                save_path=str(outdir / "scatter_risk_return.png") if outdir else None,
+                show=show,
+            )
+        else:
+            Visualizer.scatter_tvl_apy(
+                df,
+                title="TVL vs Base APY (bubble=risk)",
+                save_path=str(outdir / "scatter_tvl_apy.png") if outdir else None,
+                show=show,
+            )
     if "chain" in args.charts:
         Visualizer.bar_group_chain(
             by_chain,
