@@ -1,26 +1,43 @@
-[project]
+[tool.poetry]
 name = "stablecoin-quant"
 version = "0.1.0"
 description = ""
-authors = [
-    {name = "Axel Lode",email = "auj.lode@gmail.com"}
-]
-license = {text = "MIT"}
+authors = ["Axel Lode <auj.lode@gmail.com>"]
+license = "MIT"
 readme = "README.md"
-requires-python = ">=3.12"
-dependencies = [
-    "matplotlib (>=3.7,<4.0)",
-    "pandas (>=2.3.2,<3.0.0)"
-]
+packages = [{include = "stable_yield_lab", from = "src"}]
 
+[tool.poetry.dependencies]
+python = ">=3.12,<4.0"
+matplotlib = ">=3.10.6,<4.0.0"
+datetime = ">=5.5,<6.0"
+pandas = ">=2.3.2,<3.0.0"
+
+[tool.poetry.group.dev.dependencies]
+black = ">=24.0.0"
+ruff = ">=0.3.0"
+mypy = ">=1.8.0"
+pytest = ">=8.0.0"
+pandas-stubs = ">=2.3.2,<3.0.0"
 
 [build-system]
 requires = ["poetry-core>=2.0.0,<3.0.0"]
 build-backend = "poetry.core.masonry.api"
 
 [tool.black]
-line-length = 100
+line-length = 120
 target-version = ["py312"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
 
 [tool.pytest.ini_options]
 minversion = "7.0"

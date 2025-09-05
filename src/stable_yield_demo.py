@@ -1,11 +1,10 @@
+from pathlib import Path
 
-from datetime import datetime, timezone
-import pandas as pd
-from stable_yield_lab import CSVSource, Pipeline, Metrics, Visualizer, PoolRepository
+from stable_yield_lab import CSVSource, Metrics, Pipeline, Visualizer
 
-CSV_PATH = "./source/sample_pools.csv"
+CSV_PATH = Path(__file__).with_name("sample_pools.csv")
 # Load sample data (replace CSVSource with DefiLlamaSource/MorphoSource in production)
-src = CSVSource(path=CSV_PATH)
+src = CSVSource(path=str(CSV_PATH))
 pipe = Pipeline([src])
 repo = pipe.run()
 
