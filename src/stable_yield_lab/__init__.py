@@ -355,6 +355,46 @@ class Visualizer:
             plt.show()
 
     @staticmethod
+    def scatter_risk_return(
+        df: pd.DataFrame,
+        title: str = "Volatility vs. APY",
+        x_col: str = "volatility",
+        y_col: str = "base_apy",
+        size_col: str = "tvl_usd",
+        annotate: bool = True,
+        *,
+        save_path: str | None = None,
+        show: bool = True,
+    ) -> None:
+        """Plot volatility against APY with bubble sizes scaled by TVL."""
+        if df.empty:
+            return
+        plt = Visualizer._plt()
+        sizes = None
+        if size_col in df.columns:
+            max_val = float(df[size_col].max())
+            if max_val > 0:
+                sizes = (df[size_col] / max_val * 300).tolist()
+        plt.figure(figsize=(10, 6))
+        plt.scatter(df[x_col], df[y_col] * 100.0, s=sizes)
+        if annotate and "name" in df.columns:
+            for _, row in df.iterrows():
+                plt.annotate(
+                    str(row.get("name", "")),
+                    (row[x_col], row[y_col] * 100.0),
+                    textcoords="offset points",
+                    xytext=(5, 5),
+                )
+        plt.xlabel("Volatility")
+        plt.ylabel("APY (%)")
+        plt.title(title)
+        plt.tight_layout()
+        if save_path:
+            plt.savefig(save_path, bbox_inches="tight")
+        if show:
+            plt.show()
+
+    @staticmethod
     def bar_group_chain(
         df_group: pd.DataFrame,
         title: str = "APY (Kettenvergleich)",
