@@ -80,7 +80,7 @@ class PoolRepository:
     def __len__(self) -> int:
         return len(self._pools)
 
-    def __iter__(self):
+    def __iter__(self) -> Iterable[Pool]:
         return iter(self._pools)
 
 
