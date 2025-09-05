@@ -224,6 +224,9 @@ class Visualizer:
         title: str = "Netto-APY pro Pool",
         x_col: str = "name",
         y_col: str = "base_apy",
+        *,
+        save_path: str | None = None,
+        show: bool = True,
     ) -> None:
         if df.empty:
             return
@@ -233,7 +236,10 @@ class Visualizer:
         plt.ylabel("APY (%)")
         plt.xticks(rotation=45, ha="right")
         plt.tight_layout()
-        plt.show()
+        if save_path:
+            plt.savefig(save_path, bbox_inches="tight")
+        if show:
+            plt.show()
 
     @staticmethod
     def scatter_tvl_apy(
@@ -243,6 +249,9 @@ class Visualizer:
         y_col: str = "base_apy",
         size_col: str | None = "risk_score",
         annotate: bool = True,
+        *,
+        save_path: str | None = None,
+        show: bool = True,
     ) -> None:
         if df.empty:
             return
@@ -265,10 +274,19 @@ class Visualizer:
         plt.ylabel("APY (%)")
         plt.title(title)
         plt.tight_layout()
-        plt.show()
+        if save_path:
+            plt.savefig(save_path, bbox_inches="tight")
+        if show:
+            plt.show()
 
     @staticmethod
-    def bar_group_chain(df_group: pd.DataFrame, title: str = "APY (Kettenvergleich)") -> None:
+    def bar_group_chain(
+        df_group: pd.DataFrame,
+        title: str = "APY (Kettenvergleich)",
+        *,
+        save_path: str | None = None,
+        show: bool = True,
+    ) -> None:
         if df_group.empty:
             return
         plt.figure(figsize=(8, 5))
@@ -276,7 +294,10 @@ class Visualizer:
         plt.title(title)
         plt.ylabel("TVL-gewichteter APY (%)")
         plt.tight_layout()
-        plt.show()
+        if save_path:
+            plt.savefig(save_path, bbox_inches="tight")
+        if show:
+            plt.show()
 
 
 # -----------------
