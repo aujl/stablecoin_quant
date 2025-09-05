@@ -4,7 +4,7 @@ import argparse
 import os
 from pathlib import Path
 
-from stable_yield_lab import CSVSource, Metrics, Pipeline, Visualizer
+from stable_yield_lab import CSVSource, Metrics, Pipeline, Visualizer, risk_metrics
 from stable_yield_lab.reporting import cross_section_report
 
 
@@ -82,11 +82,19 @@ def main() -> None:
 
     df = filtered.to_dataframe().sort_values("base_apy", ascending=False)
     print(f"Pools after filter: {len(df)}")
-    df.head(20)
 
     # Summaries
     by_chain = Metrics.groupby_chain(filtered)
     top10 = Metrics.top_n(filtered, n=10, key="base_apy")
+
+    # Risk metrics derived from time-series returns (base APY as placeholder)
+    returns = df.pivot_table(index="timestamp", columns="name", values="base_apy")
+    stats = frontier = None
+    try:
+        stats = risk_metrics.summary_statistics(returns)
+        frontier = risk_metrics.efficient_frontier(returns)
+    except RuntimeError as exc:
+        print(f"Skipping risk metrics: {exc}")
 
     # Prepare outputs
     show = not args.no_show and not args.outdir
@@ -97,6 +105,10 @@ def main() -> None:
         cross_section_report(
             filtered, outdir, perf_fee_bps=args.fee_bps, mgmt_fee_bps=0.0, top_n=10
         )
+        if stats is not None:
+            stats.to_csv(outdir / "risk_stats.csv")
+        if frontier is not None:
+            frontier.to_csv(outdir / "efficient_frontier.csv")
 
     # Render charts (file-first if outdir provided)
     if "bar" in args.charts:
