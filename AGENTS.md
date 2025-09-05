@@ -1,35 +1,50 @@
 # Repository Guidelines
 
 ## Project Structure & Module Organization
-- `source/stable_yield_lab.py`: Core library (data model, sources, metrics, visuals).
-- `source/stable_yield_demo.py`: Example usage and quick sanity run.
-- `source/sample_pools.csv`: Small dataset used by the demo.
-- `create.py`: Script that can (re)generate library/demo/sample files.
-- `pyproject.toml`: Python project metadata and dependencies.
+- `src/stable_yield_lab/`: Core Python package (data model, sources, metrics, visuals).
+- `src/stable_yield_demo.py`: Example CLI demo (configurable via args/env) and file-first outputs.
+- `src/sample_pools.csv`: Small dataset used by the demo.
+- `tests/`: Pytest-based tests.
+- `pyproject.toml`: Project metadata and dependencies (Poetry-managed).
+
+## Environment & Dependencies (pyenv + Poetry)
+- Python: use `pyenv` with 3.12.
+  - `pyenv install 3.12.11 && pyenv local 3.12.11`
+- Install Poetry (once): follow https://python-poetry.org/docs/
+- Project install: `poetry install` (installs runtime + dev dependencies).
 
 ## Build, Test, and Development Commands
-- Run demo: `python source/stable_yield_demo.py` (renders sample charts, prints counts).
-- Quick REPL test: `python -i source/stable_yield_lab.py` then import classes in-session.
-- Install deps (local dev): `python -m pip install -U pip && python -m pip install pandas matplotlib`.
-- Optional tooling: `pip install ruff black pytest mypy`.
+- Run demo: `poetry run python src/stable_yield_demo.py`.
+  - Options: `--csv`, `--min-tvl`, `--min-base-apy`, `--auto-only/--no-auto-only`,
+    `--chains`, `--stablecoins`, `--charts`, `--outdir`, `--no-show`.
+  - File-first outputs: when `--outdir` is provided, demo writes `pools_filtered.csv`, `by_chain.csv`, `top10.csv`, and saves charts (PNG) instead of showing them.
+- REPL: `poetry run python -i -c "import stable_yield_lab as syl; print(dir(syl))"`.
+- Pre-commit: `poetry run pre-commit install` then `poetry run pre-commit run -a`.
+- Tests: `poetry run pytest -q`.
+- Coverage: `poetry run pytest --cov=stable_yield_lab --cov-report=term-missing`.
+- Lint/format: `poetry run black . && poetry run flake8 .`.
+- Type check: `poetry run mypy .`.
+
+Note: Prefer Poetry over pip. Only use `pip` in constrained environments where Poetry is unavailable.
 
 ## Coding Style & Naming Conventions
-- Style: PEP 8 with type hints; prefer explicit, descriptive names.
-- Indentation: 4 spaces; max line length 100 where reasonable.
-- Modules: keep core logic in `source/stable_yield_lab.py`; new adapters live under a new `source/adapters/` (e.g., `defillama.py`) and are imported in the demo as needed.
-- Formatting: `black source`; Lint: `ruff check source` (fix with `ruff --fix`).
+- Style: PEP 8 with type hints; explicit, descriptive names.
+- Indentation: 4 spaces; max line length 120.
+- Modules: core logic under `src/stable_yield_lab/`; adapters live under `src/stable_yield_lab/adapters/` (e.g., `defillama.py`).
+- Formatting: `black` (enforced via pre-commit). Lint: `flake8`. Types: `mypy`.
 
 ## Testing Guidelines
-- Framework: `pytest` (add under `tests/`).
-- Naming: files `test_*.py`; tests mirror modules, e.g., `tests/test_metrics.py`.
-- Coverage: target core paths (PoolRepository filters, Metrics, Visualizer data prep). Run with `pytest -q`.
+- Framework: `pytest` (files named `test_*.py`).
+- Target coverage: core paths (PoolRepository filters, Metrics, Visualizer data prep).
+- Local import convenience: `tests/conftest.py` adds `src/` to `sys.path` for local runs. CI installs the package.
 
 ## Commit & Pull Request Guidelines
 - Commits: small, focused; conventional prefix encouraged (e.g., `feat: add Morpho adapter`, `fix: NaN handling`).
 - PRs: include a clear summary, rationale, before/after notes, and screenshots of charts if visuals change.
-- Link issues when applicable; check passes for lint and tests.
+- Checks: pre-commit must pass; CI runs pytest with coverage.
+- pre-commit.ci: enable on the repository to auto-fix PRs and autoupdate hooks weekly.
 
 ## Security & Configuration Tips
 - Offline by default: network adapters are stubs. When adding real HTTP clients, keep keys in env vars (e.g., `MORPHO_API_KEY`) and never commit secrets.
-- Data hygiene: avoid committing large datasets; prefer small samples in `source/` and document sources.
+- Data hygiene: avoid committing large datasets; prefer small samples in `src/` and document sources.
 - Reproducibility: keep demo runnable without credentials; guard network calls behind flags.
