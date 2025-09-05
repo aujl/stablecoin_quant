@@ -67,15 +67,9 @@ def test_demo_writes_risk_csvs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) 
 
     csv_path = Path(__file__).resolve().parents[1] / "src/sample_pools.csv"
     outdir = tmp_path / "out"
-    argv = [
-        "prog",
-        "--csv",
-        str(csv_path),
-        "--outdir",
-        str(outdir),
-        "--no-show",
-    ]
-    monkeypatch.setattr(sys, "argv", argv)
+    monkeypatch.setenv("STABLE_YIELD_CSV", str(csv_path))
+    monkeypatch.setenv("STABLE_YIELD_OUTDIR", str(outdir))
+    monkeypatch.setattr(sys, "argv", ["prog"])
     stable_yield_demo.main()
 
     assert (outdir / "risk_stats.csv").is_file()
@@ -93,15 +87,9 @@ def test_demo_skips_risk_metrics_when_missing(
 
     csv_path = Path(__file__).resolve().parents[1] / "src/sample_pools.csv"
     outdir = tmp_path / "out"
-    argv = [
-        "prog",
-        "--csv",
-        str(csv_path),
-        "--outdir",
-        str(outdir),
-        "--no-show",
-    ]
-    monkeypatch.setattr(sys, "argv", argv)
+    monkeypatch.setenv("STABLE_YIELD_CSV", str(csv_path))
+    monkeypatch.setenv("STABLE_YIELD_OUTDIR", str(outdir))
+    monkeypatch.setattr(sys, "argv", ["prog"])
     stable_yield_demo.main()
 
     assert not (outdir / "risk_stats.csv").exists()
