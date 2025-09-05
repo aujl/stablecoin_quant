@@ -3,3 +3,13 @@ venv/*
 *pycache*
 *pyc
 poetry.lock
+.venv
+.coverage
+coverage.xml
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+dist/
+build/
+*.egg-info/
+*.DS_Store

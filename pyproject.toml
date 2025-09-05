@@ -9,8 +9,7 @@ license = {text = "MIT"}
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
-    "matplotlib (>=3.10.6,<4.0.0)",
-    "datetime (>=5.5,<6.0)",
+    "matplotlib (>=3.7,<4.0)",
     "pandas (>=2.3.2,<3.0.0)"
 ]
 
@@ -18,3 +17,16 @@ dependencies = [
 [build-system]
 requires = ["poetry-core>=2.0.0,<3.0.0"]
 build-backend = "poetry.core.masonry.api"
+
+[tool.black]
+line-length = 100
+target-version = ["py312"]
+
+[tool.pytest.ini_options]
+minversion = "7.0"
+addopts = "-q --strict-markers"
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+filterwarnings = [
+  "ignore::DeprecationWarning",
+]
