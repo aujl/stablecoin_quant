@@ -17,6 +17,8 @@ from datetime import UTC, datetime
 from typing import Any, Protocol
 import pandas as pd
 
+from . import risk_scoring
+
 # -----------------
 # Data Model
 # -----------------
@@ -389,7 +391,9 @@ class Pipeline:
         repo = PoolRepository()
         for s in self.sources:
             try:
-                repo.extend(s.fetch())
+                fetched = s.fetch()
+                scored = [risk_scoring.score_pool(p) for p in fetched]
+                repo.extend(scored)
             except Exception as e:
                 # Log and continue
                 print(f"[WARN] Source {s.__class__.__name__} failed: {e}")
@@ -409,4 +413,5 @@ __all__ = [
     "Pipeline",
     "risk_metrics",
     "reporting",
+    "risk_scoring",
 ]
