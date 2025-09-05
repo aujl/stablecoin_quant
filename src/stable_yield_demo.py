@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 
 from stable_yield_lab import CSVSource, Metrics, Pipeline, Visualizer
+from stable_yield_lab.reporting import cross_section_report
 
 
 def parse_list(value: str | None) -> list[str] | None:
@@ -53,6 +54,9 @@ def get_args() -> argparse.Namespace:
     )
     p.add_argument("--outdir", default=d_outdir, help="Directory to save charts and CSVs")
     p.add_argument(
+        "--fee-bps", type=float, default=0.0, help="Performance+management fees in bps for net APY"
+    )
+    p.add_argument(
         "--no-show", action="store_true", help="Do not display charts (use with --outdir)"
     )
     return p.parse_args()
@@ -89,10 +93,10 @@ def main() -> None:
     outdir = Path(args.outdir) if args.outdir else None
     if outdir:
         outdir.mkdir(parents=True, exist_ok=True)
-        # Write CSVs
-        df.to_csv(outdir / "pools_filtered.csv", index=False)
-        by_chain.to_csv(outdir / "by_chain.csv", index=False)
-        top10.to_csv(outdir / "top10.csv", index=False)
+        # Write standardized cross-section report (includes pools, rollups, topN, concentration)
+        cross_section_report(
+            filtered, outdir, perf_fee_bps=args.fee_bps, mgmt_fee_bps=0.0, top_n=10
+        )
 
     # Render charts (file-first if outdir provided)
     if "bar" in args.charts:
