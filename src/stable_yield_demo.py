@@ -1,7 +1,9 @@
 from __future__ import annotations
 
-import os
+import argparse
 import sys
+import tomllib
+import os
 import tomllib
 from pathlib import Path
 from typing import Any, cast
@@ -9,6 +11,80 @@ from typing import Any, cast
 from stable_yield_lab import CSVSource, Metrics, Pipeline, Visualizer, risk_metrics
 from stable_yield_lab.reporting import cross_section_report
 
+
+def parse_list(value: str | None) -> list[str] | None:
+    if not value:
+        return None
+    return [x.strip() for x in value.split(",") if x.strip()]
+
+
+def load_defaults(config_path: str | None) -> dict[str, object]:
+    """Load default values, optionally from a TOML config file."""
+
+    defaults: dict[str, object] = {
+        "csv": str(Path(__file__).with_name("sample_pools.csv")),
+        "min_tvl": 100000.0,
+        "min_base_apy": 0.06,
+        "auto_only": True,
+        "chains": "",
+        "stablecoins": "",
+        "charts": ["bar", "scatter", "chain"],
+        "outdir": None,
+        "fee_bps": 0.0,
+        "no_show": False,
+    }
+    if config_path:
+        with open(config_path, "rb") as f:
+            cfg = tomllib.load(f)
+        defaults.update(cfg)
+    return defaults
+
+
+def get_args(argv: list[str] | None = None) -> argparse.Namespace:
+    argv = list(sys.argv[1:] if argv is None else argv)
+    config_path = None
+    if argv and not argv[0].startswith("-"):
+        config_path = argv.pop(0)
+    d = load_defaults(config_path)
+
+    p = argparse.ArgumentParser(
+        description="StableYield demo with configurable filters and charts."
+    )
+    p.add_argument("--csv", default=d["csv"], help="Path to CSV dataset")
+    p.add_argument("--min-tvl", type=float, default=d["min_tvl"], help="Minimum TVL filter")
+    p.add_argument(
+        "--min-base-apy", type=float, default=d["min_base_apy"], help="Minimum base APY (fraction)"
+    )
+    p.add_argument(
+        "--auto-only",
+        action=argparse.BooleanOptionalAction,
+        default=bool(d["auto_only"]),
+        help="Filter to auto-only pools",
+    )
+    p.add_argument(
+        "--chains", default=d["chains"], help="Comma-separated list of chains"
+    )
+    p.add_argument(
+        "--stablecoins", default=d["stablecoins"], help="Comma-separated list of stablecoins"
+    )
+    p.add_argument(
+        "--charts",
+        nargs="*",
+        default=d["charts"],
+        choices=["bar", "scatter", "chain"],
+        help="Which charts to render",
+    )
+    p.add_argument("--outdir", default=d["outdir"], help="Directory to save charts and CSVs")
+    p.add_argument(
+        "--fee-bps", type=float, default=d["fee_bps"], help="Performance+management fees in bps for net APY"
+    )
+    p.add_argument(
+        "--no-show",
+        action="store_true",
+        default=bool(d["no_show"]),
+        help="Do not display charts (use with --outdir)",
+    )
+    return p.parse_args(argv)
 
 def load_config(path: str | Path | None) -> dict[str, Any]:
     default = {
@@ -40,6 +116,7 @@ def load_config(path: str | Path | None) -> dict[str, Any]:
         if cfg_path:
             print(f"[WARN] Config file not found at {cfg_path}. Using defaults.")
     return default
+
 
 
 def main() -> None:

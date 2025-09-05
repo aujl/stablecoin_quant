@@ -1,3 +1,15 @@
+
+csv = "src/sample_pools.csv"
+min_tvl = 100000.0
+min_base_apy = 0.06
+auto_only = true
+chains = ""
+stablecoins = ""
+charts = []
+outdir = ""
+fee_bps = 0.0
+no_show = true
+
 [csv]
 path = "src/sample_pools.csv"
 
@@ -17,3 +29,4 @@ charts = ["bar", "scatter", "chain"]
 top_n = 10
 perf_fee_bps = 0.0
 mgmt_fee_bps = 0.0
+

@@ -11,10 +11,14 @@ Design goals:
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Iterable, Iterator
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any, Protocol
+import json
+import logging
+import urllib.request
 import pandas as pd
 
 from . import risk_scoring
@@ -90,7 +94,7 @@ class PoolRepository:
     def __len__(self) -> int:
         return len(self._pools)
 
-    def __iter__(self) -> Iterable[Pool]:
+    def __iter__(self) -> Iterator[Pool]:
         return iter(self._pools)
 
 
@@ -133,31 +137,221 @@ class CSVSource:
         return pools
 
 
-# Stubs for real adapters you can implement:
-class DefiLlamaSource:
-    """Stub: HTTP GET to yields.llama.fi/pools and map entries to :class:`Pool`."""
+# -----------------
+# HTTP Data Sources
+# -----------------
 
-    def __init__(self, stable_only: bool = True) -> None:
+
+logger = logging.getLogger(__name__)
+
+
+STABLE_TOKENS = {
+    "USDC",
+    "USDT",
+    "DAI",
+    "FRAX",
+    "LUSD",
+    "GUSD",
+    "TUSD",
+    "USDP",
+    "USDD",
+    "USDR",
+    "USDf",
+    "USDF",
+    "MAI",
+    "SUSD",
+    "EURS",
+    "EUROE",
+    "CRVUSD",
+    "GHO",
+    "USDC.E",
+    "USDT.E",
+}
+
+
+class DefiLlamaSource:
+    """HTTP client for yields.llama.fi/pools."""
+
+    URL = "https://yields.llama.fi/pools"
+
+    def __init__(self, stable_only: bool = True, cache_path: str | None = None) -> None:
         self.stable_only = stable_only
+        self.cache_path = Path(cache_path) if cache_path else None
+
+    def _load(self) -> dict[str, Any]:
+        if self.cache_path and self.cache_path.exists():
+            with self.cache_path.open() as f:
+                return json.load(f)
+        with urllib.request.urlopen(self.URL) as resp:
+            data = json.load(resp)
+        if self.cache_path:
+            self.cache_path.parent.mkdir(parents=True, exist_ok=True)
+            with self.cache_path.open("w") as f:
+                json.dump(data, f)
+        return data
 
     def fetch(self) -> list[Pool]:
-        # Implement: request, parse JSON, filter stablecoin==True, map fields.
-        # Return empty in this offline template.
-        return []
+        try:
+            raw = self._load()
+        except Exception as exc:  # pragma: no cover - network errors
+            logger.warning("DefiLlama request failed: %s", exc)
+            return []
+        pools: list[Pool] = []
+        now = datetime.now(tz=UTC).timestamp()
+        for item in raw.get("data", []):
+            if self.stable_only and not item.get("stablecoin"):
+                continue
+            base_val = item.get("apyBase")
+            if base_val is None:
+                base_val = item.get("apy", 0.0)
+            reward_val = item.get("apyReward") or 0.0
+            pools.append(
+                Pool(
+                    name=f"{item.get('project', '')}:{item.get('symbol', '')}",
+                    chain=str(item.get("chain", "")),
+                    stablecoin=str(item.get("symbol", "")),
+                    tvl_usd=float(item.get("tvlUsd", 0.0)),
+                    base_apy=float(base_val) / 100.0,
+                    reward_apy=float(reward_val) / 100.0,
+                    is_auto=False,
+                    source="defillama",
+                    timestamp=now,
+                )
+            )
+        return pools
 
 
 class MorphoSource:
-    """Stub: Graph/SDK call to Morpho Blue markets -> :class:`Pool` list."""
+    """GraphQL client for Morpho Blue markets."""
+
+    URL = "https://blue-api.morpho.org/graphql"
+
+    def __init__(self, cache_path: str | None = None) -> None:
+        self.cache_path = Path(cache_path) if cache_path else None
+
+    def _post_json(self) -> dict[str, Any]:
+        payload = {
+            "query": (
+                "{ markets { items { uniqueKey loanAsset { symbol } "
+                "collateralAsset { symbol } state { supplyApy supplyAssetsUsd } } } }"
+            )
+        }
+        req = urllib.request.Request(
+            self.URL,
+            data=json.dumps(payload).encode(),
+            headers={"Content-Type": "application/json"},
+        )
+        with urllib.request.urlopen(req) as resp:
+            return json.load(resp)
+
+    def _load(self) -> dict[str, Any]:
+        if self.cache_path and self.cache_path.exists():
+            with self.cache_path.open() as f:
+                return json.load(f)
+        data = self._post_json()
+        if self.cache_path:
+            self.cache_path.parent.mkdir(parents=True, exist_ok=True)
+            with self.cache_path.open("w") as f:
+                json.dump(data, f)
+        return data
 
     def fetch(self) -> list[Pool]:
-        return []
+        try:
+            raw = self._load()
+        except Exception as exc:  # pragma: no cover - network errors
+            logger.warning("Morpho request failed: %s", exc)
+            return []
+        pools: list[Pool] = []
+        now = datetime.now(tz=UTC).timestamp()
+        items = raw.get("data", {}).get("markets", {}).get("items", [])
+        for item in items:
+            sym = str(item.get("loanAsset", {}).get("symbol", ""))
+            if sym.upper() not in STABLE_TOKENS:
+                continue
+            pools.append(
+                Pool(
+                    name=f"{sym}-{item.get('collateralAsset', {}).get('symbol', '')}",
+                    chain="Ethereum",
+                    stablecoin=sym,
+                    tvl_usd=float(item.get("state", {}).get("supplyAssetsUsd", 0.0)),
+                    base_apy=float(item.get("state", {}).get("supplyApy", 0.0)) / 100.0,
+                    reward_apy=0.0,
+                    is_auto=True,
+                    source="morpho",
+                    timestamp=now,
+                )
+            )
+        return pools
 
 
 class BeefySource:
-    """Stub: Beefy vaults endpoint -> auto-compounded vault APY as ``base_apy``."""
+    """HTTP client for Beefy vault data."""
+
+    VAULTS_URL = "https://api.beefy.finance/vaults"
+    APY_URL = "https://api.beefy.finance/apy"
+    TVL_URL = "https://api.beefy.finance/tvl"
+
+    CHAIN_IDS = {
+        "ethereum": "1",
+        "bsc": "56",
+        "polygon": "137",
+        "arbitrum": "42161",
+        "optimism": "10",
+    }
+
+    def __init__(self, cache_dir: str | None = None) -> None:
+        self.cache_dir = Path(cache_dir) if cache_dir else None
+
+    def _get_json(self, name: str, url: str) -> Any:
+        if self.cache_dir:
+            path = self.cache_dir / f"{name}.json"
+            if path.exists():
+                with path.open() as f:
+                    return json.load(f)
+        with urllib.request.urlopen(url) as resp:
+            data = json.load(resp)
+        if self.cache_dir:
+            self.cache_dir.mkdir(parents=True, exist_ok=True)
+            with (self.cache_dir / f"{name}.json").open("w") as f:
+                json.dump(data, f)
+        return data
 
     def fetch(self) -> list[Pool]:
-        return []
+        try:
+            vaults = self._get_json("vaults", self.VAULTS_URL)
+            apy = self._get_json("apy", self.APY_URL)
+            tvl = self._get_json("tvl", self.TVL_URL)
+        except Exception as exc:  # pragma: no cover - network errors
+            logger.warning("Beefy request failed: %s", exc)
+            return []
+        pools: list[Pool] = []
+        now = datetime.now(tz=UTC).timestamp()
+        for v in vaults:
+            if v.get("status") != "active":
+                continue
+            assets = v.get("assets") or []
+            if not assets or not all(
+                a.upper() in STABLE_TOKENS or "USD" in a.upper() for a in assets
+            ):
+                continue
+            chain = str(v.get("chain", ""))
+            chain_id = self.CHAIN_IDS.get(chain.lower(), chain)
+            tvl_usd = float(tvl.get(str(chain_id), {}).get(v["id"], 0.0))
+            base = float(apy.get(v["id"], 0.0))
+            pools.append(
+                Pool(
+                    name=str(v.get("name", v["id"])),
+                    chain=chain,
+                    stablecoin=str(assets[0]),
+                    tvl_usd=tvl_usd,
+                    base_apy=base,
+                    reward_apy=0.0,
+                    is_auto=True,
+                    source="beefy",
+                    timestamp=now,
+                )
+            )
+        return pools
 
 
 # -----------------
@@ -436,7 +630,7 @@ class Pipeline:
                 repo.extend(scored)
             except Exception as e:
                 # Log and continue
-                print(f"[WARN] Source {s.__class__.__name__} failed: {e}")
+                logger.warning("Source %s failed: %s", s.__class__.__name__, e)
         return repo
 
 
