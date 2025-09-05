@@ -15,7 +15,6 @@ pandas = ">=2.3.2,<3.0.0"
 
 [tool.poetry.group.dev.dependencies]
 black = ">=24.0.0"
-ruff = ">=0.3.0"
 mypy = ">=1.8.0"
 pytest = ">=8.0.0"
 pandas-stubs = ">=2.3.2,<3.0.0"
@@ -28,13 +27,17 @@ build-backend = "poetry.core.masonry.api"
 line-length = 120
 target-version = ["py312"]
 
-[tool.ruff]
-line-length = 120
-target-version = "py312"
 
-[tool.ruff.lint]
-select = ["E", "F", "I", "UP"]
 
 [tool.mypy]
 python_version = "3.12"
 strict = true
+
+[tool.pytest.ini_options]
+minversion = "7.0"
+addopts = "-q --strict-markers"
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+filterwarnings = [
+  "ignore::DeprecationWarning",
+]

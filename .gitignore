@@ -1,5 +1,42 @@
 venv
 venv/*
-*pycache*
-*pyc
+.venv/
+
+# Python bytecode / caches
+__pycache__/
+*.py[cod]
+
+# Poetry
 poetry.lock
+
+# Coverage
+.coverage
+coverage.xml
+htmlcov/
+
+# Test/Type checker caches
+.mypy_cache/
+.pytest_cache/
+.pytype/
+.pyre/
+
+# Ruff (legacy cache)
+.ruff_cache/
+
+# Build artifacts
+dist/
+build/
+*.egg-info/
+
+# Editors/OS
+.vscode/
+.idea/
+*.DS_Store
+
+# Environment files
+.env
+.env.*
+!.env.example
+
+# Node (for incidental tooling)
+node_modules/
