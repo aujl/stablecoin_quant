@@ -15,13 +15,13 @@ stablecoin_quant/
 └── pyproject.toml
 ```
 
-Run formatting, linting, and type checks with the provided tooling configs:
+Run formatting, linting, and type checks with pre-commit and pytest:
 
 ```bash
-ruff .
-black .
-mypy src
+poetry run pre-commit run -a
+poetry run pytest -q
 ```
+
 
 ## Risk Scoring
 
