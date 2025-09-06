@@ -9,19 +9,23 @@ packages = [{include = "stable_yield_lab", from = "src"}]
 
 [tool.poetry.dependencies]
 python = ">=3.12,<4.0"
-matplotlib = ">=3.10.6,<4.0.0"
-datetime = ">=5.5,<6.0"
+matplotlib = ">=3.7,<4.0"
 pandas = ">=2.3.2,<3.0.0"
+riskfolio-lib = {version = ">=6.0.0", optional = true}
 
 [tool.poetry.group.dev.dependencies]
 black = ">=24.0.0"
 mypy = ">=1.8.0"
 pytest = ">=8.0.0"
 pandas-stubs = ">=2.3.2,<3.0.0"
+pre-commit = ">=3.7.0,<4.0.0"
 
 [build-system]
 requires = ["poetry-core>=2.0.0,<3.0.0"]
 build-backend = "poetry.core.masonry.api"
+
+[tool.poetry.extras]
+risk = ["riskfolio-lib"]
 
 [tool.black]
 line-length = 120
