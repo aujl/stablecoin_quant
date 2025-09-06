@@ -34,5 +34,6 @@ repos:
     rev: v1.17.1
     hooks:
       - id: mypy
-        args: ["--config-file", "mypy.ini"]
+        args: ["--config-file", "mypy.ini", "src/stable_yield_lab"]
         additional_dependencies: []
+        pass_filenames: false
