@@ -9,38 +9,64 @@ from typing import Any, cast
 from stable_yield_lab import CSVSource, Metrics, Pipeline, Visualizer, risk_metrics
 from stable_yield_lab.reporting import cross_section_report
 
-
 def load_config(path: str | Path | None) -> dict[str, Any]:
-    """Load configuration from a TOML file or return defaults."""
 
     default = {
+
         "csv": {"path": str(Path(__file__).with_name("sample_pools.csv"))},
+
         "filters": {
+
             "min_tvl": 100_000,
+
             "min_base_apy": 0.06,
+
             "auto_only": True,
+
             # "chains": ["Ethereum"],
+
             # "stablecoins": ["USDC"],
+
         },
+
         "output": {
+
             "outdir": None,
+
             "show": True,
+
             "charts": ["bar", "scatter", "chain"],
+
         },
+
         "reporting": {"top_n": 10, "perf_fee_bps": 0.0, "mgmt_fee_bps": 0.0},
+
     }
+
     cfg_path = Path(path) if path else None
+
     if cfg_path and cfg_path.is_file():
+
         with open(cfg_path, "rb") as f:
+
             file_cfg = tomllib.load(f)
+
         for k, v in file_cfg.items():
+
             if isinstance(v, dict) and k in default and isinstance(default[k], dict):
+
                 cast(dict, default[k]).update(v)
+
             else:
+
                 default[k] = v
+
     else:
+
         if cfg_path:
+
             print(f"[WARN] Config file not found at {cfg_path}. Using defaults.")
+
     return default
 
 
@@ -52,6 +78,7 @@ def main() -> None:
         cfg.setdefault("csv", {})["path"] = csv_env
     if outdir_env := os.getenv("STABLE_YIELD_OUTDIR"):
         cfg.setdefault("output", {})["outdir"] = outdir_env
+
 
     # Load data
     csv_path = cfg["csv"]["path"]
@@ -90,28 +117,12 @@ def main() -> None:
     except RuntimeError as exc:
         print(f"Skipping risk metrics: {exc}")
 
-    if outdir:
-        outdir.mkdir(parents=True, exist_ok=True)
-        cross_section_report(
-            filtered,
-            outdir,
-            perf_fee_bps=float(cfg.get("reporting", {}).get("perf_fee_bps", 0.0)),
-            mgmt_fee_bps=float(cfg.get("reporting", {}).get("mgmt_fee_bps", 0.0)),
-            top_n=top_n,
-        )
-        if stats is not None:
-            stats.to_csv(outdir / "risk_stats.csv")
-        if frontier is not None:
-            frontier.to_csv(outdir / "efficient_frontier.csv")
 
-    charts = out.get("charts", ["bar", "scatter", "chain"]) or []
-    if "bar" in charts:
-        Visualizer.bar_apr(
-            top,
-            title="Top‑Stablecoin Pools – Base APY",
-            save_path=str(outdir / "bar_apr.png") if outdir else None,
-            show=show,
-        )
+    # Prepare outputs
+    show = not args.no_show and not args.outdir
+    outdir = Path(args.outdir) if args.outdir else None
+
+
     if "scatter" in charts:
         if "volatility" in df.columns:
             Visualizer.scatter_risk_return(

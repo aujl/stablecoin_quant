@@ -9,9 +9,9 @@ chains = []
 stablecoins = []
 
 [output]
-outdir = ""
+outdir = "outputs"
 show = false
-charts = []
+charts = ["bar", "scatter", "chain"]
 
 [reporting]
 top_n = 10
