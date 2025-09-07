@@ -172,7 +172,6 @@ class CSVSource:
             )
         return pools
 
-
 class HistoricalCSVSource:
     """Load periodic returns from a CSV with timestamp, name and period_return."""
 
@@ -196,13 +195,7 @@ class HistoricalCSVSource:
         ]
         return rows
 
-
-# -----------------
-# HTTP Data Sources
-# -----------------
-
 logger = logging.getLogger(__name__)
-
 
 STABLE_TOKENS = {
     "USDC",

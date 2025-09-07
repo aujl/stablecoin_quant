@@ -26,8 +26,8 @@ def load_config(path: str | Path | None) -> dict[str, Any]:
     }
 
     cfg_path = Path(path) if path else None
+    
     if cfg_path and cfg_path.is_file():
-
         with open(cfg_path, "rb") as f:
 
             file_cfg = tomllib.load(f)
@@ -111,6 +111,7 @@ def main() -> None:
             stats.to_csv(outdir / "risk_stats.csv")
         if frontier is not None:
             frontier.to_csv(outdir / "efficient_frontier.csv", index=False)
+
     if "scatter" in charts:
         if "volatility" in df.columns:
             Visualizer.scatter_risk_return(
