@@ -47,6 +47,11 @@ Note: Prefer Poetry over pip. Only use `pip` in constrained environments where P
 - PRs: include a clear summary, rationale, before/after notes, and screenshots of charts if visuals change.
 - Checks: pre-commit must pass; CI runs pytest with coverage.
 - pre-commit.ci: enable on the repository to auto-fix PRs and autoupdate hooks weekly.
+- Before concluding a task, ensure your branch is up to date with `main`:
+  1. Fetch the latest changes from `main`.
+  2. Merge those updates into your working branch.
+  3. Resolve any conflicts and rerun checks.
+  4. Suggest the creation of a pull request.
 
 ## Security & Configuration Tips
 - Offline by default: network adapters are stubs. When adding real HTTP clients, keep keys in env vars (e.g., `MORPHO_API_KEY`) and never commit secrets.
