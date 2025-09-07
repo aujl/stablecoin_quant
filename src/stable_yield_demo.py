@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any, cast
 
 from stable_yield_lab import CSVSource, Metrics, Pipeline, Visualizer, risk_metrics
+from stable_yield_lab.reporting import cross_section_report
 
 
 def load_config(path: str | Path | None) -> dict[str, Any]:
@@ -18,18 +19,13 @@ def load_config(path: str | Path | None) -> dict[str, Any]:
             "min_base_apy": 0.06,
             "auto_only": True,
             # "chains": ["Ethereum"],
-            # "stablecoins": ["USDC"],
+            # "stablecoins": ["USDC"]
         },
-        "output": {
-            "outdir": None,
-            "show": True,
-            "charts": ["bar", "scatter", "chain"],
-        },
+        "output": {"outdir": None, "show": True, "charts": ["bar", "scatter", "chain"]},
         "reporting": {"top_n": 10, "perf_fee_bps": 0.0, "mgmt_fee_bps": 0.0},
     }
 
     cfg_path = Path(path) if path else None
-
     if cfg_path and cfg_path.is_file():
 
         with open(cfg_path, "rb") as f:
@@ -104,11 +100,17 @@ def main() -> None:
 
     if outdir:
         outdir.mkdir(parents=True, exist_ok=True)
+        cross_section_report(
+            filtered,
+            outdir,
+            perf_fee_bps=float(cfg.get("reporting", {}).get("perf_fee_bps", 0.0)),
+            mgmt_fee_bps=float(cfg.get("reporting", {}).get("mgmt_fee_bps", 0.0)),
+            top_n=top_n,
+        )
         if stats is not None:
             stats.to_csv(outdir / "risk_stats.csv")
         if frontier is not None:
             frontier.to_csv(outdir / "efficient_frontier.csv", index=False)
-
     if "scatter" in charts:
         if "volatility" in df.columns:
             Visualizer.scatter_risk_return(

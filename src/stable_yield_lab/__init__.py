@@ -201,7 +201,6 @@ class HistoricalCSVSource:
 # HTTP Data Sources
 # -----------------
 
-
 logger = logging.getLogger(__name__)
 
 
