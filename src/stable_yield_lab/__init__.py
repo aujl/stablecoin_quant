@@ -98,6 +98,42 @@ class PoolRepository:
         return iter(self._pools)
 
 
+# Additional data model for time-series returns
+
+
+@dataclass(frozen=True)
+class PoolReturn:
+    """Periodic return observation for a given pool."""
+
+    name: str
+    timestamp: pd.Timestamp
+    period_return: float
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "name": self.name,
+            "timestamp": self.timestamp,
+            "period_return": self.period_return,
+        }
+
+
+class ReturnRepository:
+    """Collection of :class:`PoolReturn` rows with pivot helper."""
+
+    def __init__(self, rows: Iterable[PoolReturn] | None = None) -> None:
+        self._rows: list[PoolReturn] = list(rows) if rows else []
+
+    def extend(self, rows: Iterable[PoolReturn]) -> None:
+        self._rows.extend(rows)
+
+    def to_timeseries(self) -> pd.DataFrame:
+        if not self._rows:
+            return pd.DataFrame()
+        df = pd.DataFrame([r.to_dict() for r in self._rows])
+        df["timestamp"] = pd.to_datetime(df["timestamp"], utc=True)
+        return df.pivot(index="timestamp", columns="name", values="period_return").sort_index()
+
+
 # -----------------
 # Data Sources API
 # -----------------
@@ -136,14 +172,30 @@ class CSVSource:
             )
         return pools
 
+class HistoricalCSVSource:
+    """Load periodic returns from a CSV with timestamp, name and period_return."""
 
-# -----------------
-# HTTP Data Sources
-# -----------------
+    def __init__(self, path: str) -> None:
+        self.path = path
 
+    def fetch(self) -> list[PoolReturn]:
+        df = pd.read_csv(self.path)
+        required = {"timestamp", "name", "period_return"}
+        missing = required.difference(df.columns)
+        if missing:
+            raise ValueError(f"CSV missing columns: {missing}")
+        df["timestamp"] = pd.to_datetime(df["timestamp"], utc=True)
+        rows = [
+            PoolReturn(
+                name=str(r["name"]),
+                timestamp=pd.Timestamp(r["timestamp"]),
+                period_return=float(r["period_return"]),
+            )
+            for _, r in df.iterrows()
+        ]
+        return rows
 
 logger = logging.getLogger(__name__)
-
 
 STABLE_TOKENS = {
     "USDC",
@@ -618,7 +670,7 @@ class Visualizer:
 class Pipeline:
     """Composable pipeline: fetch -> repository -> filter -> metrics -> visuals"""
 
-    def __init__(self, sources: list[DataSource]) -> None:
+    def __init__(self, sources: list[Any]) -> None:
         self.sources = sources
 
     def run(self) -> PoolRepository:
@@ -633,12 +685,24 @@ class Pipeline:
                 logger.warning("Source %s failed: %s", s.__class__.__name__, e)
         return repo
 
+    def run_history(self) -> pd.DataFrame:
+        repo = ReturnRepository()
+        for s in self.sources:
+            try:
+                repo.extend(s.fetch())
+            except Exception as e:
+                logger.warning("Source %s failed: %s", s.__class__.__name__, e)
+        return repo.to_timeseries()
+
 
 __all__ = [
     "Pool",
     "PoolRepository",
+    "PoolReturn",
+    "ReturnRepository",
     "DataSource",
     "CSVSource",
+    "HistoricalCSVSource",
     "DefiLlamaSource",
     "MorphoSource",
     "BeefySource",

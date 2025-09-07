@@ -1,0 +1,5 @@
+timestamp,name,period_return
+2024-01-01,PoolA,0.01
+2024-01-08,PoolA,0.011
+2024-01-01,PoolB,0.008
+2024-01-15,PoolB,0.007
