@@ -9,7 +9,6 @@ on:
 
 jobs:
   analyze-issue:
-    if: github.event_name == 'issues'
     runs-on: ubuntu-latest
     steps:
       - name: Check for Codex secrets

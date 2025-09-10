@@ -9,7 +9,6 @@ on:
 
 jobs:
   issue-resolution:
-    if: github.event_name == 'issue_comment'
     runs-on: ubuntu-latest
     steps:
       - name: Check for Codex secrets
