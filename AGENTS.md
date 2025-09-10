@@ -14,10 +14,14 @@
 - Project install: `poetry install` (installs runtime + dev dependencies).
 
 ## Build, Test, and Development Commands
-- Run demo: `poetry run python src/stable_yield_demo.py`.
-  - Options: `--csv`, `--min-tvl`, `--min-base-apy`, `--auto-only/--no-auto-only`,
-    `--chains`, `--stablecoins`, `--charts`, `--outdir`, `--no-show`.
-  - File-first outputs: when `--outdir` is provided, demo writes `pools_filtered.csv`, `by_chain.csv`, `top10.csv`, and saves charts (PNG) instead of showing them.
+- Run demo (config file): `poetry run python src/stable_yield_demo.py configs/demo.toml`
+  - Config schema (TOML):
+    - `[csv] path`
+    - `[filters] min_tvl, min_base_apy, auto_only, chains[], stablecoins[]`
+    - `[output] outdir, show, charts=["bar","scatter","chain"]`
+    - `[reporting] top_n, perf_fee_bps, mgmt_fee_bps`
+  - Env override for config path: `STABLE_YIELD_CONFIG=...` or pass as first arg.
+  - File-first outputs in `output.outdir`: standardized CSVs + PNG charts.
 - REPL: `poetry run python -i -c "import stable_yield_lab as syl; print(dir(syl))"`.
 - Pre-commit: `poetry run pre-commit install` then `poetry run pre-commit run -a`.
 - Tests: `poetry run pytest -q`.
@@ -43,6 +47,11 @@ Note: Prefer Poetry over pip. Only use `pip` in constrained environments where P
 - PRs: include a clear summary, rationale, before/after notes, and screenshots of charts if visuals change.
 - Checks: pre-commit must pass; CI runs pytest with coverage.
 - pre-commit.ci: enable on the repository to auto-fix PRs and autoupdate hooks weekly.
+- Before concluding a task, ensure your branch is up to date with `main`:
+  1. Fetch the latest changes from `main`.
+  2. Merge those updates into your working branch.
+  3. Resolve any conflicts and rerun checks.
+  4. Suggest the creation of a pull request.
 
 ## Security & Configuration Tips
 - Offline by default: network adapters are stubs. When adding real HTTP clients, keep keys in env vars (e.g., `MORPHO_API_KEY`) and never commit secrets.

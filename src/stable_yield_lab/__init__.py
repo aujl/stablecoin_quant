@@ -11,11 +11,17 @@ Design goals:
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Iterable, Iterator
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any, Protocol
+import json
+import logging
+import urllib.request
 import pandas as pd
+
+from . import risk_scoring
 
 # -----------------
 # Data Model
@@ -88,8 +94,44 @@ class PoolRepository:
     def __len__(self) -> int:
         return len(self._pools)
 
-    def __iter__(self) -> Iterable[Pool]:
+    def __iter__(self) -> Iterator[Pool]:
         return iter(self._pools)
+
+
+# Additional data model for time-series returns
+
+
+@dataclass(frozen=True)
+class PoolReturn:
+    """Periodic return observation for a given pool."""
+
+    name: str
+    timestamp: pd.Timestamp
+    period_return: float
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "name": self.name,
+            "timestamp": self.timestamp,
+            "period_return": self.period_return,
+        }
+
+
+class ReturnRepository:
+    """Collection of :class:`PoolReturn` rows with pivot helper."""
+
+    def __init__(self, rows: Iterable[PoolReturn] | None = None) -> None:
+        self._rows: list[PoolReturn] = list(rows) if rows else []
+
+    def extend(self, rows: Iterable[PoolReturn]) -> None:
+        self._rows.extend(rows)
+
+    def to_timeseries(self) -> pd.DataFrame:
+        if not self._rows:
+            return pd.DataFrame()
+        df = pd.DataFrame([r.to_dict() for r in self._rows])
+        df["timestamp"] = pd.to_datetime(df["timestamp"], utc=True)
+        return df.pivot(index="timestamp", columns="name", values="period_return").sort_index()
 
 
 # -----------------
@@ -130,32 +172,238 @@ class CSVSource:
             )
         return pools
 
+class HistoricalCSVSource:
+    """Load periodic returns from a CSV with timestamp, name and period_return."""
 
-# Stubs for real adapters you can implement:
+    def __init__(self, path: str) -> None:
+        self.path = path
+
+    def fetch(self) -> list[PoolReturn]:
+        df = pd.read_csv(self.path)
+        required = {"timestamp", "name", "period_return"}
+        missing = required.difference(df.columns)
+        if missing:
+            raise ValueError(f"CSV missing columns: {missing}")
+        df["timestamp"] = pd.to_datetime(df["timestamp"], utc=True)
+        rows = [
+            PoolReturn(
+                name=str(r["name"]),
+                timestamp=pd.Timestamp(r["timestamp"]),
+                period_return=float(r["period_return"]),
+            )
+            for _, r in df.iterrows()
+        ]
+        return rows
+
+logger = logging.getLogger(__name__)
+
+STABLE_TOKENS = {
+    "USDC",
+    "USDT",
+    "DAI",
+    "FRAX",
+    "LUSD",
+    "GUSD",
+    "TUSD",
+    "USDP",
+    "USDD",
+    "USDR",
+    "USDf",
+    "USDF",
+    "MAI",
+    "SUSD",
+    "EURS",
+    "EUROE",
+    "CRVUSD",
+    "GHO",
+    "USDC.E",
+    "USDT.E",
+}
+
+
 class DefiLlamaSource:
-    """Stub: HTTP GET to yields.llama.fi/pools and map entries to :class:`Pool`."""
+    """HTTP client for yields.llama.fi/pools."""
 
-    def __init__(self, stable_only: bool = True) -> None:
+    URL = "https://yields.llama.fi/pools"
+
+    def __init__(self, stable_only: bool = True, cache_path: str | None = None) -> None:
         self.stable_only = stable_only
+        self.cache_path = Path(cache_path) if cache_path else None
+
+    def _load(self) -> dict[str, Any]:
+        if self.cache_path and self.cache_path.exists():
+            with self.cache_path.open() as f:
+                return json.load(f)
+        with urllib.request.urlopen(self.URL) as resp:
+            data = json.load(resp)
+        if self.cache_path:
+            self.cache_path.parent.mkdir(parents=True, exist_ok=True)
+            with self.cache_path.open("w") as f:
+                json.dump(data, f)
+        return data
 
     def fetch(self) -> list[Pool]:
-        # Implement: request, parse JSON, filter stablecoin==True, map fields.
-        # Return empty in this offline template.
-        return []
+        try:
+            raw = self._load()
+        except Exception as exc:  # pragma: no cover - network errors
+            logger.warning("DefiLlama request failed: %s", exc)
+            return []
+        pools: list[Pool] = []
+        now = datetime.now(tz=UTC).timestamp()
+        for item in raw.get("data", []):
+            if self.stable_only and not item.get("stablecoin"):
+                continue
+            base_val = item.get("apyBase")
+            if base_val is None:
+                base_val = item.get("apy", 0.0)
+            reward_val = item.get("apyReward") or 0.0
+            pools.append(
+                Pool(
+                    name=f"{item.get('project', '')}:{item.get('symbol', '')}",
+                    chain=str(item.get("chain", "")),
+                    stablecoin=str(item.get("symbol", "")),
+                    tvl_usd=float(item.get("tvlUsd", 0.0)),
+                    base_apy=float(base_val) / 100.0,
+                    reward_apy=float(reward_val) / 100.0,
+                    is_auto=False,
+                    source="defillama",
+                    timestamp=now,
+                )
+            )
+        return pools
 
 
 class MorphoSource:
-    """Stub: Graph/SDK call to Morpho Blue markets -> :class:`Pool` list."""
+    """GraphQL client for Morpho Blue markets."""
+
+    URL = "https://blue-api.morpho.org/graphql"
+
+    def __init__(self, cache_path: str | None = None) -> None:
+        self.cache_path = Path(cache_path) if cache_path else None
+
+    def _post_json(self) -> dict[str, Any]:
+        payload = {
+            "query": (
+                "{ markets { items { uniqueKey loanAsset { symbol } "
+                "collateralAsset { symbol } state { supplyApy supplyAssetsUsd } } } }"
+            )
+        }
+        req = urllib.request.Request(
+            self.URL,
+            data=json.dumps(payload).encode(),
+            headers={"Content-Type": "application/json"},
+        )
+        with urllib.request.urlopen(req) as resp:
+            return json.load(resp)
+
+    def _load(self) -> dict[str, Any]:
+        if self.cache_path and self.cache_path.exists():
+            with self.cache_path.open() as f:
+                return json.load(f)
+        data = self._post_json()
+        if self.cache_path:
+            self.cache_path.parent.mkdir(parents=True, exist_ok=True)
+            with self.cache_path.open("w") as f:
+                json.dump(data, f)
+        return data
 
     def fetch(self) -> list[Pool]:
-        return []
+        try:
+            raw = self._load()
+        except Exception as exc:  # pragma: no cover - network errors
+            logger.warning("Morpho request failed: %s", exc)
+            return []
+        pools: list[Pool] = []
+        now = datetime.now(tz=UTC).timestamp()
+        items = raw.get("data", {}).get("markets", {}).get("items", [])
+        for item in items:
+            sym = str(item.get("loanAsset", {}).get("symbol", ""))
+            if sym.upper() not in STABLE_TOKENS:
+                continue
+            pools.append(
+                Pool(
+                    name=f"{sym}-{item.get('collateralAsset', {}).get('symbol', '')}",
+                    chain="Ethereum",
+                    stablecoin=sym,
+                    tvl_usd=float(item.get("state", {}).get("supplyAssetsUsd", 0.0)),
+                    base_apy=float(item.get("state", {}).get("supplyApy", 0.0)) / 100.0,
+                    reward_apy=0.0,
+                    is_auto=True,
+                    source="morpho",
+                    timestamp=now,
+                )
+            )
+        return pools
 
 
 class BeefySource:
-    """Stub: Beefy vaults endpoint -> auto-compounded vault APY as ``base_apy``."""
+    """HTTP client for Beefy vault data."""
+
+    VAULTS_URL = "https://api.beefy.finance/vaults"
+    APY_URL = "https://api.beefy.finance/apy"
+    TVL_URL = "https://api.beefy.finance/tvl"
+
+    CHAIN_IDS = {
+        "ethereum": "1",
+        "bsc": "56",
+        "polygon": "137",
+        "arbitrum": "42161",
+        "optimism": "10",
+    }
+
+    def __init__(self, cache_dir: str | None = None) -> None:
+        self.cache_dir = Path(cache_dir) if cache_dir else None
+
+    def _get_json(self, name: str, url: str) -> Any:
+        if self.cache_dir:
+            path = self.cache_dir / f"{name}.json"
+            if path.exists():
+                with path.open() as f:
+                    return json.load(f)
+        with urllib.request.urlopen(url) as resp:
+            data = json.load(resp)
+        if self.cache_dir:
+            self.cache_dir.mkdir(parents=True, exist_ok=True)
+            with (self.cache_dir / f"{name}.json").open("w") as f:
+                json.dump(data, f)
+        return data
 
     def fetch(self) -> list[Pool]:
-        return []
+        try:
+            vaults = self._get_json("vaults", self.VAULTS_URL)
+            apy = self._get_json("apy", self.APY_URL)
+            tvl = self._get_json("tvl", self.TVL_URL)
+        except Exception as exc:  # pragma: no cover - network errors
+            logger.warning("Beefy request failed: %s", exc)
+            return []
+        pools: list[Pool] = []
+        now = datetime.now(tz=UTC).timestamp()
+        for v in vaults:
+            if v.get("status") != "active":
+                continue
+            assets = v.get("assets") or []
+            if not assets or not all(
+                a.upper() in STABLE_TOKENS or "USD" in a.upper() for a in assets
+            ):
+                continue
+            chain = str(v.get("chain", ""))
+            chain_id = self.CHAIN_IDS.get(chain.lower(), chain)
+            tvl_usd = float(tvl.get(str(chain_id), {}).get(v["id"], 0.0))
+            base = float(apy.get(v["id"], 0.0))
+            pools.append(
+                Pool(
+                    name=str(v.get("name", v["id"])),
+                    chain=chain,
+                    stablecoin=str(assets[0]),
+                    tvl_usd=tvl_usd,
+                    base_apy=base,
+                    reward_apy=0.0,
+                    is_auto=True,
+                    source="beefy",
+                    timestamp=now,
+                )
+            )
+        return pools
 
 
 # -----------------
@@ -353,6 +601,46 @@ class Visualizer:
             plt.show()
 
     @staticmethod
+    def scatter_risk_return(
+        df: pd.DataFrame,
+        title: str = "Volatility vs. APY",
+        x_col: str = "volatility",
+        y_col: str = "base_apy",
+        size_col: str = "tvl_usd",
+        annotate: bool = True,
+        *,
+        save_path: str | None = None,
+        show: bool = True,
+    ) -> None:
+        """Plot volatility against APY with bubble sizes scaled by TVL."""
+        if df.empty:
+            return
+        plt = Visualizer._plt()
+        sizes = None
+        if size_col in df.columns:
+            max_val = float(df[size_col].max())
+            if max_val > 0:
+                sizes = (df[size_col] / max_val * 300).tolist()
+        plt.figure(figsize=(10, 6))
+        plt.scatter(df[x_col], df[y_col] * 100.0, s=sizes)
+        if annotate and "name" in df.columns:
+            for _, row in df.iterrows():
+                plt.annotate(
+                    str(row.get("name", "")),
+                    (row[x_col], row[y_col] * 100.0),
+                    textcoords="offset points",
+                    xytext=(5, 5),
+                )
+        plt.xlabel("Volatility")
+        plt.ylabel("APY (%)")
+        plt.title(title)
+        plt.tight_layout()
+        if save_path:
+            plt.savefig(save_path, bbox_inches="tight")
+        if show:
+            plt.show()
+
+    @staticmethod
     def bar_group_chain(
         df_group: pd.DataFrame,
         title: str = "APY (Kettenvergleich)",
@@ -382,25 +670,39 @@ class Visualizer:
 class Pipeline:
     """Composable pipeline: fetch -> repository -> filter -> metrics -> visuals"""
 
-    def __init__(self, sources: list[DataSource]) -> None:
+    def __init__(self, sources: list[Any]) -> None:
         self.sources = sources
 
     def run(self) -> PoolRepository:
         repo = PoolRepository()
         for s in self.sources:
             try:
-                repo.extend(s.fetch())
+                fetched = s.fetch()
+                scored = [risk_scoring.score_pool(p) for p in fetched]
+                repo.extend(scored)
             except Exception as e:
                 # Log and continue
-                print(f"[WARN] Source {s.__class__.__name__} failed: {e}")
+                logger.warning("Source %s failed: %s", s.__class__.__name__, e)
         return repo
+
+    def run_history(self) -> pd.DataFrame:
+        repo = ReturnRepository()
+        for s in self.sources:
+            try:
+                repo.extend(s.fetch())
+            except Exception as e:
+                logger.warning("Source %s failed: %s", s.__class__.__name__, e)
+        return repo.to_timeseries()
 
 
 __all__ = [
     "Pool",
     "PoolRepository",
+    "PoolReturn",
+    "ReturnRepository",
     "DataSource",
     "CSVSource",
+    "HistoricalCSVSource",
     "DefiLlamaSource",
     "MorphoSource",
     "BeefySource",
@@ -410,4 +712,5 @@ __all__ = [
     "risk_metrics",
     "reporting",
     "portfolio",
+    "risk_scoring",
 ]
