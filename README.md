@@ -34,8 +34,9 @@ GitHub workflows integrate with [Codex](https://github.com/features/copilot) for
 reviews and issue analysis.
 
 - **Secrets**: `CODEX_API_URL` and `CODEX_API_KEY` must be set in repository secrets.
+- Workflows skip Codex steps if these secrets are unset.
 - **Triggers**:
-  - `pull_request` events (`opened`, `synchronize`, `reopened`) send the diff to Codex for review.
+  - `pull_request` events (`opened`, `synchronize`, `reopened`) send the diff to Codex for review and tag `@codex` on the pull request.
   - `issues` events (`opened`, `edited`) forward the issue content for analysis.
   - `issue_comment` events (`created`) send the comment thread for resolution suggestions.
 

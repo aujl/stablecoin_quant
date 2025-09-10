@@ -24,7 +24,10 @@ jobs:
           # Install runtime deps from pyproject
           pip install .
           # Install dev tools
-          pip install black flake8 mypy pytest pytest-cov autoflake
+          pip install pre-commit black flake8 mypy pytest pytest-cov autoflake
+
+      - name: Run pre-commit
+        run: pre-commit run --color=always --show-diff-on-failure --all-files
 
       - name: Run headless demo (config-driven)
         env:

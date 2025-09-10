@@ -26,7 +26,7 @@ def load_config(path: str | Path | None) -> dict[str, Any]:
     }
 
     cfg_path = Path(path) if path else None
-    
+
     if cfg_path and cfg_path.is_file():
         with open(cfg_path, "rb") as f:
 
