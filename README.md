@@ -22,6 +22,23 @@ poetry run pre-commit run -a
 poetry run pytest -q
 ```
 
+### Local Commands & Environment Variables
+
+- Run the demo: `poetry run python src/stable_yield_demo.py configs/demo.toml`
+- Override the demo config path with `STABLE_YIELD_CONFIG=/path/to/config.toml`
+- Export `CODEX_API_URL` and `CODEX_API_KEY` to experiment with Codex locally
+
+## Codex Workflows
+
+GitHub workflows integrate with [Codex](https://github.com/features/copilot) for automated pull request
+reviews and issue analysis.
+
+- **Secrets**: `CODEX_API_URL` and `CODEX_API_KEY` must be set in repository secrets.
+- **Triggers**:
+  - `pull_request` events (`opened`, `synchronize`, `reopened`) send the diff to Codex for review.
+  - `issues` events (`opened`, `edited`) forward the issue content for analysis.
+  - `issue_comment` events (`created`) send the comment thread for resolution suggestions.
+
 
 ## Risk Scoring
 
