@@ -1,0 +1,42 @@
+name: Codex Issue Analysis
+
+# Triggered when issues are opened or edited to request Codex suggestions.
+on:
+  issues:
+    types: [opened, edited]
+
+permissions:
+  issues: read
+
+jobs:
+  analyze-issue:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check for Codex secrets
+        id: check-secrets
+        run: |
+          if [ -z "${{ secrets.CODEX_API_KEY }}" ] || [ -z "${{ secrets.CODEX_API_URL }}" ]; then
+            echo "Skipping Codex analysis: CODEX_API_KEY or CODEX_API_URL is not set."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Analyze issue with Codex
+        if: steps.check-secrets.outputs.skip != 'true'
+        uses: actions/github-script@v7
+        env:
+          CODEX_API_URL: ${{ secrets.CODEX_API_URL }}
+          CODEX_API_KEY: ${{ secrets.CODEX_API_KEY }}
+        with:
+          script: |
+            const res = await fetch(`${process.env.CODEX_API_URL}/issues`, {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${process.env.CODEX_API_KEY}`
+              },
+              body: JSON.stringify({
+                title: context.payload.issue.title,
+                body: context.payload.issue.body
+              })
+            });
+            core.info(await res.text());

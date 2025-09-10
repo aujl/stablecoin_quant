@@ -172,6 +172,7 @@ class CSVSource:
             )
         return pools
 
+
 class HistoricalCSVSource:
     """Load periodic returns from a CSV with timestamp, name and period_return."""
 
@@ -194,6 +195,7 @@ class HistoricalCSVSource:
             for _, r in df.iterrows()
         ]
         return rows
+
 
 logger = logging.getLogger(__name__)
 

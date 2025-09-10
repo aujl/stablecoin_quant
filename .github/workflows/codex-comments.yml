@@ -1,0 +1,45 @@
+name: Codex Comment Resolution
+
+# Triggered when new comments are added to issues for Codex follow-up.
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  issues: read
+
+jobs:
+  issue-resolution:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check for Codex secrets
+        id: check-secrets
+        run: |
+          if [ -z "${{ secrets.CODEX_API_KEY }}" ] || [ -z "${{ secrets.CODEX_API_URL }}" ]; then
+            echo "Skipping Codex comment analysis: CODEX_API_KEY or CODEX_API_URL is not set."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Send comment thread to Codex
+        if: steps.check-secrets.outputs.skip != 'true'
+        uses: actions/github-script@v7
+        env:
+          CODEX_API_URL: ${{ secrets.CODEX_API_URL }}
+          CODEX_API_KEY: ${{ secrets.CODEX_API_KEY }}
+        with:
+          script: |
+            const issue = context.payload.issue;
+            const comment = context.payload.comment;
+            const res = await fetch(`${process.env.CODEX_API_URL}/comments`, {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${process.env.CODEX_API_KEY}`
+              },
+              body: JSON.stringify({
+                title: issue.title,
+                body: issue.body,
+                comment: comment.body
+              })
+            });
+            core.info(await res.text());
