@@ -1,0 +1,34 @@
+name: Codex Comment Resolution
+
+on:
+  issue_comment:
+    types: [created]
+
+jobs:
+  issue-resolution:
+    if: github.event_name == 'issue_comment'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Send comment thread to Codex
+        uses: actions/github-script@v7
+        env:
+          CODEX_API_URL: ${{ secrets.CODEX_API_URL }}
+          CODEX_API_KEY: ${{ secrets.CODEX_API_KEY }}
+        with:
+          script: |
+            const fetch = require('node-fetch');
+            const issue = context.payload.issue;
+            const comment = context.payload.comment;
+            const res = await fetch(`${process.env.CODEX_API_URL}/comments`, {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${process.env.CODEX_API_KEY}`
+              },
+              body: JSON.stringify({
+                title: issue.title,
+                body: issue.body,
+                comment: comment.body
+              })
+            });
+            core.info(await res.text());

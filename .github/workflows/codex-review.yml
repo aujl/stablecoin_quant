@@ -1,0 +1,25 @@
+name: Codex PR Review
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+jobs:
+  review-pr:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Send diff to Codex for review
+        env:
+          CODEX_API_URL: ${{ secrets.CODEX_API_URL }}
+          CODEX_API_KEY: ${{ secrets.CODEX_API_KEY }}
+        run: |
+          git fetch origin ${{ github.event.pull_request.base.sha }}
+          git diff ${{ github.event.pull_request.base.sha }}..${{ github.sha }} > pr.diff
+          curl -sS -X POST "$CODEX_API_URL/review" \
+            -H "Authorization: Bearer $CODEX_API_KEY" \
+            -H "Content-Type: text/plain" \
+            --data-binary @pr.diff
