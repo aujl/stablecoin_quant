@@ -11,7 +11,7 @@ packages = [{include = "stable_yield_lab", from = "src"}]
 python = ">=3.12,<4.0"
 matplotlib = ">=3.7,<4.0"
 pandas = ">=2.3.2,<3.0.0"
-riskfolio-lib = {version = ">=6.0.0", optional = true}
+riskfolio-lib = ">=7.0.1,<8.0.0"
 
 [tool.poetry.group.dev.dependencies]
 black = ">=24.0.0"

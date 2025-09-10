@@ -711,5 +711,6 @@ __all__ = [
     "Pipeline",
     "risk_metrics",
     "reporting",
+    "portfolio",
     "risk_scoring",
 ]
