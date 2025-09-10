@@ -13,10 +13,20 @@ jobs:
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     steps:
+      - name: Check for Codex secrets
+        id: check-secrets
+        run: |
+          if [ -z "${{ secrets.CODEX_API_KEY }}" ] || [ -z "${{ secrets.CODEX_API_URL }}" ]; then
+            echo "Skipping Codex review: CODEX_API_KEY or CODEX_API_URL is not set."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Checkout repository
+        if: steps.check-secrets.outputs.skip != 'true'
         uses: actions/checkout@v4
 
       - name: Send diff to Codex for review
+        if: steps.check-secrets.outputs.skip != 'true'
         env:
           CODEX_API_URL: ${{ secrets.CODEX_API_URL }}
           CODEX_API_KEY: ${{ secrets.CODEX_API_KEY }}
