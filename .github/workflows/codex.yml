@@ -1,5 +1,9 @@
 name: Codex Integration
 
+permissions:
+  contents: read
+  pull-requests: read
+
 on:
   pull_request:
     types: [opened, synchronize, reopened]
@@ -30,6 +34,8 @@ jobs:
 
   analyze-issue:
     if: github.event_name == 'issues'
+    permissions:
+      issues: read
     runs-on: ubuntu-latest
     steps:
       - name: Analyze issue with Codex
@@ -55,6 +61,8 @@ jobs:
 
   issue-resolution:
     if: github.event_name == 'issue_comment'
+    permissions:
+      issues: read
     runs-on: ubuntu-latest
     steps:
       - name: Send comment thread to Codex
