@@ -1,5 +1,8 @@
 name: Codex Comment Resolution
 
+permissions:
+  issues: read
+
 on:
   issue_comment:
     types: [created]

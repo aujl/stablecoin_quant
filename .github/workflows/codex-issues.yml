@@ -1,5 +1,8 @@
 name: Codex Issue Analysis
 
+permissions:
+  issues: read
+
 on:
   issues:
     types: [opened, edited]
