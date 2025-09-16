@@ -8,7 +8,11 @@ compounding identity :math:`G_t = \prod_{i=1}^t (1 + r_i)`.
 
 from __future__ import annotations
 
+from collections.abc import Iterable
+from datetime import tzinfo
+
 import pandas as pd
+from pandas.tseries.frequencies import to_offset
 
 
 def cumulative_return(series: pd.Series) -> pd.Series:
@@ -96,6 +100,156 @@ def nav_series(
     portfolio_ret = clean_returns.mul(norm_weights, axis=1).sum(axis=1)
     compounded = cumulative_return(portfolio_ret)
     return float(initial) * (1.0 + compounded)
+
+
+def _align_timezone(index: pd.DatetimeIndex, tz: tzinfo | None) -> pd.DatetimeIndex:
+    if tz is None:
+        if index.tz is not None:
+            return index.tz_localize(None)
+        return index
+
+    if index.tz is None:
+        return index.tz_localize(tz)
+    return index.tz_convert(tz)
+
+
+def _rebalance_schedule(
+    index: pd.DatetimeIndex,
+    calendar: str | pd.DatetimeIndex | Iterable[pd.Timestamp] | pd.Timestamp | None,
+) -> pd.DatetimeIndex:
+    if calendar is None:
+        schedule = pd.DatetimeIndex([], tz=index.tz)
+    elif isinstance(calendar, str):
+        try:
+            offset = to_offset(calendar)
+        except ValueError as exc:
+            raise ValueError(f"invalid calendar frequency: {calendar}") from exc
+        schedule = pd.date_range(start=index[0], end=index[-1], freq=offset, tz=index.tz)
+    elif isinstance(calendar, pd.Timestamp):
+        schedule = pd.DatetimeIndex([calendar])
+    elif isinstance(calendar, pd.DatetimeIndex):
+        schedule = calendar.copy()
+    elif isinstance(calendar, Iterable):
+        schedule = pd.DatetimeIndex(list(calendar))
+    else:
+        raise TypeError("unsupported calendar specification")
+
+    schedule = _align_timezone(schedule, index.tz)
+    return schedule.intersection(index)
+
+
+def nav_with_rebalance(
+    returns: pd.DataFrame,
+    calendar: str | pd.DatetimeIndex | Iterable[pd.Timestamp] | pd.Timestamp | None,
+    *,
+    weights: pd.Series | None = None,
+    initial: float = 1.0,
+) -> pd.Series:
+    r"""Simulate a portfolio NAV path with periodic rebalancing.
+
+    The function models a buy-and-hold portfolio that is *only* rebalanced to
+    the target weights on the provided ``calendar``. Between those events the
+    asset weights drift according to realised returns. All returns are treated
+    as discrete simple returns and missing observations are interpreted as zero
+    performance. Assets that are absent from ``weights`` receive a zero
+    allocation whenever the portfolio is rebalanced.
+
+    Under these assumptions the portfolio NAV evolves as
+
+    .. math::
+       \text{NAV}_t = \text{NAV}_{t-1} (1 + r_{p,t}), \qquad
+       r_{p,t} = \sum_i w_{i,t^-} r_{i,t},
+
+    where :math:`w_{i,t^-}` denotes the weights immediately before period
+    :math:`t`. After each period the drifted weights satisfy
+
+    .. math::
+       w_{i,t^+} = \frac{w_{i,t^-} (1 + r_{i,t})}{1 + r_{p,t}},
+
+    and these weights are reset to the target allocation only on calendar
+    dates.
+
+    Parameters
+    ----------
+    returns:
+        Wide DataFrame of periodic simple returns (rows are timestamps,
+        columns are assets). The index must be a ``DatetimeIndex`` and will be
+        processed in chronological order.
+    calendar:
+        Rebalancing schedule. Accepted inputs include a pandas frequency alias
+        (e.g. ``"W-MON"`` or ``"M"``), a ``DatetimeIndex``/sequence of
+        timestamps, or a single timestamp. Only dates that are present in
+        ``returns.index`` trigger a rebalance. If the calendar does not contain
+        any in-sample dates the portfolio is rebalanced only on the first
+        observation and then allowed to drift. Passing ``None`` has the same
+        effect as providing an empty calendar.
+    weights:
+        Target weights applied on rebalance dates. If ``None`` the portfolio is
+        equally weighted across all assets. Missing assets receive a weight of
+        zero. The weights are normalised to sum to one.
+    initial:
+        Starting NAV value. Units are preserved in the output.
+
+    Returns
+    -------
+    pandas.Series
+        Simulated NAV values aligned with ``returns``.
+
+    Raises
+    ------
+    TypeError
+        If ``returns.index`` is not a ``DatetimeIndex``.
+    ValueError
+        If the normalised weights sum to zero.
+    """
+    if returns.empty:
+        return pd.Series(dtype=float)
+
+    ordered_returns = returns.sort_index()
+    if not isinstance(ordered_returns.index, pd.DatetimeIndex):
+        raise TypeError("returns index must be a DatetimeIndex")
+
+    clean_returns = ordered_returns.fillna(0.0)
+    if clean_returns.shape[1] == 0:
+        return pd.Series(dtype=float)
+
+    if weights is None:
+        target = pd.Series(1.0 / clean_returns.shape[1], index=clean_returns.columns)
+    else:
+        target = weights.reindex(clean_returns.columns).fillna(0.0)
+
+    total_weight = float(target.sum())
+    if total_weight == 0.0:
+        raise ValueError("weights sum to zero")
+
+    target_weights = target / total_weight
+
+    index = clean_returns.index
+    schedule_index = _rebalance_schedule(index, calendar)
+    if schedule_index.empty or schedule_index[0] != index[0]:
+        schedule_index = schedule_index.union(pd.DatetimeIndex([index[0]]))
+    schedule = set(schedule_index)
+
+    nav_path: list[float] = []
+    nav_value = float(initial)
+    current_weights = target_weights.copy()
+
+    for timestamp, period_returns in clean_returns.iterrows():
+        if timestamp in schedule:
+            current_weights = target_weights.copy()
+
+        portfolio_return = float(period_returns.mul(current_weights).sum())
+        nav_value *= 1.0 + portfolio_return
+        nav_path.append(nav_value)
+
+        gross = current_weights * (1.0 + period_returns)
+        gross_total = float(gross.sum())
+        if gross_total == 0.0:
+            current_weights = pd.Series(0.0, index=current_weights.index)
+        else:
+            current_weights = gross / gross_total
+
+    return pd.Series(nav_path, index=index)
 
 
 def nav_trajectories(returns: pd.DataFrame, *, initial_investment: float) -> pd.DataFrame:

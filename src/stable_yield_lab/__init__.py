@@ -22,7 +22,7 @@ import urllib.request
 import pandas as pd
 
 from . import performance, risk_scoring
-from .performance import cumulative_return, nav_series
+from .performance import cumulative_return, nav_series, nav_with_rebalance
 
 
 # -----------------
@@ -819,6 +819,7 @@ __all__ = [
     "Pipeline",
     "cumulative_return",
     "nav_series",
+    "nav_with_rebalance",
     "risk_metrics",
     "reporting",
     "portfolio",
