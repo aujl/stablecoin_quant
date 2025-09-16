@@ -6,6 +6,8 @@ import tomllib
 from pathlib import Path
 from typing import Any, cast
 
+import pandas as pd
+
 from stable_yield_lab import (
     CSVSource,
     HistoricalCSVSource,
@@ -46,6 +48,7 @@ def load_config(path: str | Path | None) -> dict[str, Any]:
         },
         "output": {"outdir": None, "show": True, "charts": ["bar", "scatter", "chain"]},
         "reporting": {"top_n": 10, "perf_fee_bps": 0.0, "mgmt_fee_bps": 0.0},
+        "rebalancing": {"cost_bps": 0.0, "fixed_fee": 0.0},
     }
 
     cfg_path = Path(path) if path else None
@@ -74,6 +77,20 @@ def load_config(path: str | Path | None) -> dict[str, Any]:
     return default
 
 
+def _infer_periods_per_year(index: pd.Index) -> float | None:
+    """Approximate the number of compounding periods per year for a NAV index."""
+
+    if not isinstance(index, pd.DatetimeIndex) or index.size < 2:
+        return None
+    diffs = index.to_series().diff().dropna()
+    if diffs.empty:
+        return None
+    mean_days = diffs.dt.total_seconds().mean() / 86_400.0
+    if mean_days <= 0:
+        return None
+    return 365.25 / mean_days
+
+
 def main() -> None:
     """Run the demo using configuration from file or environment variables."""
     cfg_file = os.getenv("STABLE_YIELD_CONFIG") or (sys.argv[1] if len(sys.argv) > 1 else None)
@@ -90,6 +107,10 @@ def main() -> None:
             cfg["initial_investment"] = float(init_env)
         except ValueError:
             pass
+
+    rebal_cfg = cfg.setdefault("rebalancing", {"cost_bps": 0.0, "fixed_fee": 0.0})
+    rebalance_cost_bps = float(rebal_cfg.get("cost_bps", 0.0))
+    rebalance_fixed_fee = float(rebal_cfg.get("fixed_fee", 0.0))
 
     # Load data
     csv_path = cfg["csv"]["path"]
@@ -172,6 +193,29 @@ def main() -> None:
         returns_ts = Pipeline([hist_src]).run_history()
         initial = float(cfg.get("initial_investment", 1.0))
         nav_ts = performance.nav_trajectories(returns_ts, initial_investment=initial)
+        portfolio_nav = performance.nav_series(
+            returns_ts,
+            None,
+            initial=initial,
+            rebalance_cost_bps=rebalance_cost_bps,
+            rebalance_fixed_fee=rebalance_fixed_fee,
+        )
+        nav_plot = nav_ts.copy()
+        if not portfolio_nav.empty:
+            total_growth = float(portfolio_nav.iloc[-1] / initial)
+            net_returns = portfolio_nav.attrs.get("net_returns")
+            periods = len(net_returns) if isinstance(net_returns, pd.Series) else 0
+            freq = _infer_periods_per_year(portfolio_nav.index) if periods else None
+            apy_text = ""
+            if periods and freq:
+                apy = total_growth ** (freq / periods) - 1.0
+                apy_text = f", net APY ≈ {apy:.2%}"
+            print(
+                "Equal-weight NAV (net of rebalance costs "
+                f"{rebalance_cost_bps:.2f} bps & {rebalance_fixed_fee:.2f} fixed): "
+                f"{portfolio_nav.iloc[-1]:.2f} ({(total_growth - 1.0):.2%} total return{apy_text})"
+            )
+            nav_plot["EqualWeight"] = portfolio_nav
         yield_ts = performance.yield_trajectories(returns_ts) * 100.0
         Visualizer.line_chart(
             yield_ts,
@@ -181,7 +225,7 @@ def main() -> None:
             show=show,
         )
         Visualizer.line_chart(
-            nav_ts,
+            nav_plot,
             title="NAV over time",
             ylabel="NAV (USD)",
             save_path=str(outdir / "nav_vs_time.png") if outdir else None,
