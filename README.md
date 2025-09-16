@@ -48,7 +48,7 @@ GitHub workflows tag [@codex](https://github.com/features/copilot) to request au
 issue triage, and comment follow-ups—no external API credentials are required.
 
 - **Triggers**:
-  - `pull_request` events (`opened`, `synchronize`, `reopened`) post a comment asking `@codex` to review for tests, security, and documentation.
+  - `pull_request_target` events (`opened`, `synchronize`, `reopened`) post a single comment asking `@codex` to review for tests, security, and documentation.
   - `issues` events (`opened`, `edited`) tag `@codex` for triage guidance and next steps.
   - `issue_comment` events (`created`) notify `@codex` to summarize the thread and suggest owners/actions.
 
