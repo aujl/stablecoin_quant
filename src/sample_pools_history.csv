@@ -1,0 +1,4 @@
+name,history_start,history_end,observations,realized_return_52w,realized_apy_52w,realized_volatility_52w,max_drawdown_52w,last_period_return
+Aave USDT v3 (Polygon),2023-07-16,2024-07-07,52,0.086133,0.086133,0.011028,-0.009,0.002433
+Curve 3Pool Convex (ETH),2023-07-16,2024-07-07,52,0.059392,0.059392,0.023207,-0.02287,0.002438
+Morpho USDC (ETH),2023-07-16,2024-07-07,52,0.117477,0.117477,0.012712,-0.01,0.003164
