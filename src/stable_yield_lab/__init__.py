@@ -1174,6 +1174,36 @@ class Visualizer:
         if show:
             plt.show()
 
+    @staticmethod
+    def bar_realised_vs_target(
+        df: pd.DataFrame,
+        *,
+        title: str = "Realised vs target APY",
+        save_path: str | None = None,
+        show: bool = True,
+    ) -> None:
+        """Plot realised vs target APY as grouped bars in percentage space."""
+        if df.empty:
+            return
+        required = {"name", "realised_apy", "target_apy"}
+        if not required.issubset(df.columns):
+            raise ValueError("DataFrame must contain name, realised_apy and target_apy columns")
+        plt = Visualizer._plt()
+        plt.figure(figsize=(10, 6))
+        x = range(len(df))
+        width = 0.35
+        plt.bar(x, df["target_apy"] * 100.0, width=width, label="Target")
+        plt.bar([i + width for i in x], df["realised_apy"] * 100.0, width=width, label="Realised")
+        plt.xticks([i + width / 2 for i in x], df["name"], rotation=45, ha="right")
+        plt.ylabel("APY (%)")
+        plt.title(title)
+        plt.legend()
+        plt.tight_layout()
+        if save_path:
+            plt.savefig(save_path, bbox_inches="tight")
+        if show:
+            plt.show()
+
 
 # -----------------
 # Pipeline
