@@ -13,6 +13,7 @@ from stable_yield_lab import (
     Pipeline,
     Visualizer,
     performance,
+    rebalance,
     risk_metrics,
 )
 from stable_yield_lab.reporting import cross_section_report
@@ -45,7 +46,12 @@ def load_config(path: str | Path | None) -> dict[str, Any]:
             # "stablecoins": ["USDC"]
         },
         "output": {"outdir": None, "show": True, "charts": ["bar", "scatter", "chain"]},
-        "reporting": {"top_n": 10, "perf_fee_bps": 0.0, "mgmt_fee_bps": 0.0},
+        "reporting": {
+            "top_n": 10,
+            "perf_fee_bps": 0.0,
+            "mgmt_fee_bps": 0.0,
+            "trading_cost_bps": 5.0,
+        },
     }
 
     cfg_path = Path(path) if path else None
@@ -187,6 +193,31 @@ def main() -> None:
             save_path=str(outdir / "nav_vs_time.png") if outdir else None,
             show=show,
         )
+
+        trading_cost = float(cfg.get("reporting", {}).get("trading_cost_bps", 5.0))
+        rebalance_result = rebalance.run_rebalance(returns_ts, trading_cost_bps=trading_cost)
+
+        if not rebalance_result.target_weights.empty:
+            if outdir:
+                rebalance_result.target_weights.to_csv(outdir / "rebalance_weights.csv")
+            Visualizer.plot_weight_schedule(
+                rebalance_result.target_weights,
+                title="Target portfolio weights",
+                save_path=str(outdir / "rebalance_weights.png") if outdir else None,
+                show=show,
+            )
+
+        if not rebalance_result.turnover.empty:
+            turnover_df = rebalance_result.turnover.to_frame(name="turnover")
+            turnover_df["fees"] = rebalance_result.fees
+            if outdir:
+                turnover_df.to_csv(outdir / "rebalance_turnover.csv")
+            Visualizer.plot_turnover(
+                turnover_df,
+                title="Turnover & trading fees",
+                save_path=str(outdir / "rebalance_turnover.png") if outdir else None,
+                show=show,
+            )
 
 
 if __name__ == "__main__":
