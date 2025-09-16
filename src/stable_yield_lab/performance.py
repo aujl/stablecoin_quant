@@ -209,9 +209,9 @@ def estimate_pool_apy(
     .. math::
        \text{APY} = G_T^{n_f / T} - 1.
 
-    Performance and management fees supplied in basis points reduce the gross
-    APY by a multiplicative factor :math:`1 - (\text{perf} + \text{mgmt}) / 10^4`
-    with a floor at ``-100%``.
+    Performance and management fees supplied in basis points reduce the annual
+    growth factor by a multiplicative factor :math:`1 - (\text{perf} + \text{mgmt}) / 10^4`
+    with a floor at ``-100%`` on the resulting APY.
 
     Parameters
     ----------
@@ -293,7 +293,8 @@ def estimate_pool_apy(
         gross_apy = (1.0 + total_return) ** annual_factor - 1.0
         gross[column] = gross_apy
 
-        net_apy = gross_apy * fee_multiplier
+        net_growth = (1.0 + gross_apy) * fee_multiplier
+        net_apy = net_growth - 1.0
         if net_apy < -1.0:
             net_apy = -1.0
         net[column] = net_apy

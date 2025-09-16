@@ -628,11 +628,14 @@ class Metrics:
     ) -> float:
         """Compute net APY after performance/management fees.
 
-        Fees are specified in basis points (1% = 100 bps).
+        Fees are specified in basis points (1% = 100 bps) and reduce the annual
+        growth factor, ensuring net APY never exceeds gross APY when fees are
+        positive.
         """
         gross = float(base_apy) + float(reward_apy)
         fee_frac = (perf_fee_bps + mgmt_fee_bps) / 10_000.0
-        return max(gross * (1.0 - fee_frac), -1.0)
+        net_growth = (1.0 + gross) * (1.0 - fee_frac)
+        return max(net_growth - 1.0, -1.0)
 
     @staticmethod
     def add_net_apy_column(

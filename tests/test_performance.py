@@ -203,7 +203,7 @@ def test_estimate_pool_apy_weekly_dataframe_with_fees() -> None:
     annual_factor = 52.0 / periods
     expected_gross = (1.0 + totals) ** annual_factor - 1.0
     fee_frac = 0.03
-    expected_net = (expected_gross * (1.0 - fee_frac)).clip(lower=-1.0)
+    expected_net = ((1.0 + expected_gross) * (1.0 - fee_frac) - 1.0).clip(lower=-1.0)
 
     pd.testing.assert_index_equal(summary.index, returns.columns)
     assert summary["periods"].eq(periods).all()
