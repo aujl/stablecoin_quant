@@ -76,6 +76,24 @@ Interactively explore the same calculations from Python:
 A steadily rising NAV indicates compounding growth; falling or flat lines flag underperformance.
 For a step-by-step example, see [docs/investor_walkthrough.md](docs/investor_walkthrough.md).
 
+### Demo configuration
+
+Configuration values are supplied via TOML. The `[csv]` section controls the
+validated ingestion layer that powers the CLI demo:
+
+| Key | Description |
+| --- | --- |
+| `path` | Path to the cached CSV of pools. |
+| `validation` | One of `"none"`, `"warn"`, or `"strict"` to control schema enforcement. |
+| `expected_frequency` | Optional pandas-style frequency string (`"D"`, `"W"`, etc.) checked against inferred cadence. |
+| `auto_refresh` | When `true`, call the refresh hook before reading cached data. |
+| `refresh_url` | Optional HTTP endpoint that returns the latest CSV; used when `auto_refresh = true`. |
+
+When `auto_refresh` is enabled but no `refresh_url` is provided the demo skips
+the refresh and logs a warning. Successful ingestion prints the detected
+frequency whenever the timestamp column contains enough information to infer
+periodicity.
+
 ## Codex Workflows
 
 GitHub workflows tag [@codex](https://github.com/features/copilot) to request automated pull request reviews,

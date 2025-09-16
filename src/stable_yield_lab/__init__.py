@@ -15,7 +15,7 @@ from collections.abc import Iterable, Iterator
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Literal, Protocol
+from typing import Any, Callable, Mapping, Protocol, Literal, cast
 import json
 import logging
 import warnings
@@ -196,6 +196,254 @@ class CSVSource:
         return pools
 
 
+class SchemaAwareCSVSource(CSVSource):
+    """CSV loader with schema validation, frequency inference and refresh hooks."""
+
+    DEFAULT_SCHEMA: Mapping[str, Any] = {
+        "name": str,
+        "chain": str,
+        "stablecoin": str,
+        "tvl_usd": float,
+        "base_apy": float,
+        "reward_apy": float,
+        "is_auto": bool,
+        "source": str,
+        "risk_score": float,
+        "timestamp": float,
+    }
+
+    def __init__(
+        self,
+        path: str | Path,
+        schema: Mapping[str, Any] | None = None,
+        *,
+        validation: ValidationLevel = "warn",
+        expected_frequency: str | None = None,
+        frequency_column: str = "timestamp",
+        auto_refresh: bool = False,
+        refresh_callback: Callable[[Path], None] | None = None,
+    ) -> None:
+        super().__init__(str(path))
+        self.path_obj = Path(path)
+        base_schema = dict(self.DEFAULT_SCHEMA)
+        if schema:
+            base_schema.update(schema)
+        self.schema = base_schema
+        level = str(validation).lower()
+        if level not in {"none", "warn", "strict"}:
+            raise ValueError(f"Unknown validation level: {validation}")
+        self.validation: ValidationLevel = cast(ValidationLevel, level)
+        self.expected_frequency = expected_frequency or None
+        self.frequency_column = frequency_column
+        self.auto_refresh = bool(auto_refresh)
+        self.refresh_callback = refresh_callback
+        self.detected_frequency: str | None = None
+
+    def fetch(self) -> list[Pool]:
+        self._maybe_refresh()
+        df = pd.read_csv(self.path_obj)
+        self._validate_columns(df)
+        for column, expected in self.schema.items():
+            if column in df.columns:
+                self._convert_column(df, column, expected)
+
+        self.detected_frequency = None
+        if self.frequency_column in df.columns:
+            freq = self._infer_frequency(df[self.frequency_column])
+            self.detected_frequency = freq
+            if self.expected_frequency:
+                if freq is None:
+                    self._handle_validation_issue(
+                        (
+                            f"Unable to infer frequency for column '{self.frequency_column}' "
+                            f"(expected {self.expected_frequency})."
+                        )
+                    )
+                elif freq != self.expected_frequency:
+                    self._handle_validation_issue(
+                        (
+                            f"Detected frequency '{freq}' does not match expected "
+                            f"'{self.expected_frequency}'."
+                        )
+                    )
+
+        now = datetime.now(tz=UTC).timestamp()
+        pools: list[Pool] = []
+        for _, row in df.iterrows():
+            pools.append(
+                Pool(
+                    name=self._as_str(row.get("name"), ""),
+                    chain=self._as_str(row.get("chain"), ""),
+                    stablecoin=self._as_str(row.get("stablecoin"), ""),
+                    tvl_usd=self._as_float(row.get("tvl_usd"), 0.0),
+                    base_apy=self._as_float(row.get("base_apy"), 0.0),
+                    reward_apy=self._as_float(row.get("reward_apy"), 0.0),
+                    is_auto=self._as_bool(row.get("is_auto"), True),
+                    source=self._as_str(row.get("source"), "csv"),
+                    risk_score=self._as_float(row.get("risk_score"), 2.0),
+                    timestamp=self._timestamp_from_value(row.get("timestamp"), now),
+                )
+            )
+        return pools
+
+    def _maybe_refresh(self) -> None:
+        if not (self.auto_refresh and self.refresh_callback):
+            return
+        try:
+            self.refresh_callback(self.path_obj)
+        except Exception as exc:
+            message = f"Refresh callback failed for {self.path_obj}: {exc}"
+            if self.validation == "strict":
+                raise RuntimeError(message) from exc
+            logger.warning(message)
+
+    def _validate_columns(self, df: pd.DataFrame) -> None:
+        missing = [col for col in self.schema if col not in df.columns]
+        if missing:
+            self._handle_validation_issue(
+                f"CSV missing expected columns: {', '.join(missing)}"
+            )
+            for col in missing:
+                if col not in df.columns:
+                    df[col] = pd.NA
+
+    def _convert_column(self, df: pd.DataFrame, column: str, expected: Any) -> None:
+        series = df[column]
+        if expected in {float, int}:
+            converted = pd.to_numeric(series, errors="coerce")
+            invalid_mask = converted.isna() & ~series.isna()
+            if invalid_mask.any():
+                self._handle_validation_issue(
+                    f"Column '{column}' contains non-numeric values; coerced to NaN."
+                )
+            if expected is int:
+                converted = converted.round().astype("Int64")
+            df[column] = converted
+            return
+        if expected is bool:
+            converted_values: list[bool] = []
+            had_errors = False
+            for value in series:
+                try:
+                    converted_values.append(self._convert_bool(value))
+                except ValueError:
+                    had_errors = True
+                    converted_values.append(True)
+            if had_errors:
+                self._handle_validation_issue(
+                    f"Column '{column}' contains invalid booleans; defaulting to True."
+                )
+            df[column] = pd.Series(converted_values, dtype=bool)
+            return
+        if expected is str:
+            df[column] = series.astype(str)
+            return
+        if callable(expected):
+            try:
+                df[column] = series.apply(expected)
+            except Exception as exc:
+                self._handle_validation_issue(
+                    f"Failed to apply converter for column '{column}': {exc}", exc
+                )
+            return
+
+    def _infer_frequency(self, series: pd.Series) -> str | None:
+        if series.empty:
+            return None
+        if pd.api.types.is_datetime64_any_dtype(series):
+            dt_series = series.dropna()
+        elif pd.api.types.is_numeric_dtype(series):
+            dt_series = pd.to_datetime(series, unit="s", utc=True, errors="coerce").dropna()
+        else:
+            dt_series = pd.to_datetime(series, utc=True, errors="coerce").dropna()
+        if dt_series.empty:
+            return None
+        index = pd.DatetimeIndex(dt_series.sort_values().unique())
+        if len(index) < 3:
+            return None
+        try:
+            freq = pd.infer_freq(index)
+        except (TypeError, ValueError):
+            return None
+        if freq is None:
+            return None
+        try:
+            alias = pd.tseries.frequencies.to_offset(freq).freqstr
+        except ValueError:
+            alias = freq
+        return cast(str | None, alias)
+
+    def _handle_validation_issue(self, message: str, exc: Exception | None = None) -> None:
+        if self.validation == "strict":
+            raise ValueError(message) from exc
+        if self.validation == "warn":
+            logger.warning(message)
+
+    @staticmethod
+    def _convert_bool(value: Any) -> bool:
+        if isinstance(value, bool):
+            return value
+        if pd.isna(value):
+            raise ValueError("Boolean value is missing")
+        if isinstance(value, (int, float)):
+            return bool(int(value))
+        if isinstance(value, str):
+            val = value.strip().lower()
+            if val in {"true", "1", "yes", "y", "t"}:
+                return True
+            if val in {"false", "0", "no", "n", "f"}:
+                return False
+        raise ValueError(f"Cannot interpret boolean value {value!r}")
+
+    @staticmethod
+    def _as_str(value: Any, default: str) -> str:
+        if pd.isna(value):
+            return default
+        return str(value)
+
+    @staticmethod
+    def _as_float(value: Any, default: float) -> float:
+        if pd.isna(value):
+            return float(default)
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return float(default)
+
+    def _as_bool(self, value: Any, default: bool) -> bool:
+        if pd.isna(value):
+            return default
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, (int, float)):
+            return bool(int(value))
+        if isinstance(value, str):
+            val = value.strip().lower()
+            if val in {"true", "1", "yes", "y", "t"}:
+                return True
+            if val in {"false", "0", "no", "n", "f"}:
+                return False
+        return default
+
+    def _timestamp_from_value(self, value: Any, default: float) -> float:
+        if pd.isna(value):
+            return default
+        if isinstance(value, pd.Timestamp):
+            return value.to_pydatetime().timestamp()
+        if isinstance(value, datetime):
+            dt = value if value.tzinfo else value.replace(tzinfo=UTC)
+            return dt.timestamp()
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            parsed = pd.to_datetime(value, utc=True, errors="coerce")
+            if pd.isna(parsed):
+                self._handle_validation_issue(
+                    f"Unable to parse timestamp value {value!r}; using fallback."
+                )
+                return default
+            return parsed.to_pydatetime().timestamp()
+
 FillStrategy = Literal["none", "ffill", "bfill", "ffill_bfill", "zero", "ffill_zero"]
 
 
@@ -360,6 +608,8 @@ class HistoricalCSVSource:
 
 
 logger = logging.getLogger(__name__)
+
+ValidationLevel = Literal["none", "warn", "strict"]
 
 STABLE_TOKENS = {
     "USDC",

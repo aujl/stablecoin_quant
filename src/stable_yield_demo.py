@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import logging
 import os
 import sys
 import tomllib
+import urllib.request
 import warnings
 from pathlib import Path
 from typing import Any, cast
@@ -10,16 +12,18 @@ from typing import Any, cast
 import pandas as pd
 
 from stable_yield_lab import (
-    CSVSource,
     HistoricalCSVSource,
     Metrics,
     Pipeline,
+    SchemaAwareCSVSource,
     Visualizer,
     performance,
     risk_metrics,
 )
 from stable_yield_lab.reporting import cross_section_report
 
+
+logger = logging.getLogger(__name__)
 
 def _normalise_lookbacks(raw: Any) -> dict[str, Any]:
     """Coerce configuration lookback definitions into a labelled mapping."""
@@ -47,7 +51,13 @@ def load_config(path: str | Path | None) -> dict[str, Any]:
     """
 
     default = {
-        "csv": {"path": str(Path(__file__).with_name("sample_pools.csv"))},
+        "csv": {
+            "path": str(Path(__file__).with_name("sample_pools.csv")),
+            "validation": "warn",
+            "expected_frequency": None,
+            "auto_refresh": False,
+            "refresh_url": None,
+        },
         "yields_csv": str(Path(__file__).with_name("sample_yields.csv")),
         "initial_investment": 1_000.0,
         "filters": {
@@ -115,9 +125,42 @@ def main() -> None:
     yield_ts_pct: pd.DataFrame | None = None
 
     # Load data
-    csv_path = cfg["csv"]["path"]
-    src = CSVSource(path=csv_path)
+    csv_cfg = cfg.get("csv", {})
+    csv_path = str(csv_cfg.get("path", cfg["csv"]["path"]))
+    validation_level = str(csv_cfg.get("validation", "warn"))
+    expected_frequency = csv_cfg.get("expected_frequency")
+    if expected_frequency:
+        expected_frequency = str(expected_frequency)
+    else:
+        expected_frequency = None
+    frequency_column = str(csv_cfg.get("frequency_column", "timestamp"))
+    auto_refresh = bool(csv_cfg.get("auto_refresh", False))
+    refresh_url = csv_cfg.get("refresh_url") or None
+
+    refresh_callback = None
+    if refresh_url:
+        url = str(refresh_url)
+
+        def refresh_callback(target: Path, *, _url: str = url) -> None:
+            with urllib.request.urlopen(_url) as response:
+                target.write_bytes(response.read())
+
+    elif auto_refresh:
+        logger.warning("Auto refresh requested but no refresh_url provided; skipping refresh.")
+        auto_refresh = False
+
+    src = SchemaAwareCSVSource(
+        path=csv_path,
+        validation=validation_level,
+        expected_frequency=expected_frequency,
+        frequency_column=frequency_column,
+        auto_refresh=auto_refresh,
+        refresh_callback=refresh_callback,
+    )
     repo = Pipeline([src]).run()
+
+    if src.detected_frequency:
+        print(f"Detected CSV frequency: {src.detected_frequency}")
 
     # Apply filters
     f = cfg.get("filters", {})

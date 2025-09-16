@@ -4,6 +4,10 @@ yields_csv = "src/sample_yields.csv"
 
 [csv]
 path = "src/sample_pools.csv"
+validation = "warn"
+expected_frequency = ""
+auto_refresh = false
+refresh_url = ""
 
 [filters]
 min_tvl = 100000
