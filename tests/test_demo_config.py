@@ -11,6 +11,10 @@ def test_loads_config_file() -> None:
     assert cfg["csv"]["path"].endswith("sample_pools.csv")
     assert cfg["output"]["show"] is False
     assert cfg["output"]["charts"] == ["bar", "scatter", "chain"]
+    assert cfg["output"]["history_charts"] == ["rolling_apy", "drawdowns", "realised_vs_target"]
+    history_cfg = cfg["reporting"]["history"]
+    assert history_cfg["enabled"] is True
+    assert history_cfg["rolling_windows"] == [4, 12]
     assert "realised_apy_lookbacks" in cfg["reporting"]
     assert cfg["reporting"]["realised_apy_lookbacks"]["last 52 weeks"] == "52W"
 

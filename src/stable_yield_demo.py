@@ -67,11 +67,22 @@ def load_config(path: str | Path | None) -> dict[str, Any]:
             # "chains": ["Ethereum"],
             # "stablecoins": ["USDC"]
         },
-        "output": {"outdir": None, "show": True, "charts": ["bar", "scatter", "chain"]},
+        "output": {
+            "outdir": None,
+            "show": True,
+            "charts": ["bar", "scatter", "chain"],
+            "history_charts": ["rolling_apy", "drawdowns", "realised_vs_target"],
+        },
         "reporting": {
             "top_n": 10,
             "perf_fee_bps": 0.0,
             "mgmt_fee_bps": 0.0,
+            "history": {
+                "enabled": True,
+                "rolling_windows": [4, 12],
+                "periods_per_year": 52,
+                "target_field": "net_apy",
+            },
             "realised_apy_lookbacks": {"last 2 weeks": "14D", "last 52 weeks": "52W"},
         },
     }
@@ -177,7 +188,8 @@ def main() -> None:
 
     # Summaries
     by_chain = Metrics.groupby_chain(filtered)
-    top_n = int(cfg.get("reporting", {}).get("top_n", 10))
+    reporting_cfg = cfg.get("reporting", {})
+    top_n = int(reporting_cfg.get("top_n", 10))
     Metrics.top_n(filtered, n=top_n, key="base_apy")
 
     # Outputs
@@ -185,7 +197,18 @@ def main() -> None:
     outdir = Path(out.get("outdir") or "") if out.get("outdir") else None
     show = bool(out.get("show", True)) if not outdir else False
     charts = out.get("charts", [])
+    history_charts = out.get("history_charts", [])
 
+    history_cfg = reporting_cfg.get("history", {})
+    history_enabled = bool(history_cfg.get("enabled", False))
+    rolling_windows_cfg = history_cfg.get("rolling_windows") or ()
+    rolling_windows = tuple(int(w) for w in rolling_windows_cfg if int(w) > 0)
+    if not rolling_windows:
+        rolling_windows = (4, 12)
+    periods_per_year = int(history_cfg.get("periods_per_year", 52))
+    target_field = str(history_cfg.get("target_field", "net_apy"))
+
+    returns_ts = pd.DataFrame()
     pool_names = {pool.name for pool in filtered}
     history_path = cfg.get("yields_csv")
     historical_returns = pd.DataFrame()
@@ -229,35 +252,45 @@ def main() -> None:
         except Exception as exc:
             print(f"Skipping risk metrics: {exc}")
 
-    if cfg.get("yields_csv"):
-        hist_src = HistoricalCSVSource(str(cfg["yields_csv"]))
-        returns_ts = Pipeline([hist_src]).run_history()
-        if not returns_ts.empty:
-            initial = float(cfg.get("initial_investment", 1.0))
-            nav_ts = performance.nav_trajectories(returns_ts, initial_investment=initial)
-            yield_ts_pct = performance.yield_trajectories(returns_ts) * 100.0
-            if lookbacks_cfg:
-                apy_table = performance.horizon_apys(nav_ts, lookbacks=lookbacks_cfg, value_type="nav")
-                if not apy_table.empty:
-                    apy_table = apy_table.rename(
-                        columns={label: f"Realised APY ({label})" for label in apy_table.columns}
-                    )
-                    realised_apys = apy_table
-                    if not df.empty:
-                        df = df.merge(apy_table, left_on="name", right_index=True, how="left")
-                    pretty = apy_table.mul(100.0).round(2)
-                    print("Realised APY horizons (annualised, %):")
-                    print(pretty.to_string())
+    if not historical_returns.empty:
+        returns_ts = historical_returns
+        initial = float(cfg.get("initial_investment", 1.0))
+        nav_ts = performance.nav_trajectories(returns_ts, initial_investment=initial)
+        yield_ts_pct = performance.yield_trajectories(returns_ts) * 100.0
+        if lookbacks_cfg:
+            apy_table = performance.horizon_apys(nav_ts, lookbacks=lookbacks_cfg, value_type="nav")
+            if not apy_table.empty:
+                apy_table = apy_table.rename(
+                    columns={label: f"Realised APY ({label})" for label in apy_table.columns}
+                )
+                realised_apys = apy_table
+                if not df.empty:
+                    df = df.merge(apy_table, left_on="name", right_index=True, how="left")
+                pretty = apy_table.mul(100.0).round(2)
+                print("Realised APY horizons (annualised, %):")
+                print(pretty.to_string())
+    elif lookbacks_cfg:
+        warnings.warn(
+            "Realised APY lookbacks configured but no historical returns available.",
+            stacklevel=2,
+        )
+
+    report_paths: dict[str, Path] = {}
 
     if outdir:
         outdir.mkdir(parents=True, exist_ok=True)
-        cross_section_report(
+        history_returns = returns_ts if history_enabled and not returns_ts.empty else None
+        report_paths = cross_section_report(
             filtered,
             outdir,
             perf_fee_bps=float(cfg.get("reporting", {}).get("perf_fee_bps", 0.0)),
             mgmt_fee_bps=float(cfg.get("reporting", {}).get("mgmt_fee_bps", 0.0)),
             top_n=top_n,
             horizon_apys=realised_apys,
+            returns=history_returns,
+            rolling_windows=rolling_windows,
+            periods_per_year=periods_per_year,
+            target_field=target_field,
         )
         if stats is not None:
             stats.to_csv(outdir / "risk_stats.csv")
@@ -287,28 +320,67 @@ def main() -> None:
             show=show,
         )
 
-    # Performance trajectories from historical yields
-    returns_for_nav = returns_for_metrics if not returns_for_metrics.empty else historical_returns
-    if not returns_for_nav.empty:
-        initial = float(cfg.get("initial_investment", 1.0))
-        nav_ts = performance.nav_trajectories(returns_for_nav, initial_investment=initial)
-        yield_ts = performance.yield_trajectories(returns_for_nav) * 100.0
+    if history_enabled and not returns_ts.empty:
+        if yield_ts_pct is None or yield_ts_pct.empty:
+            yield_ts_pct = performance.yield_trajectories(returns_ts) * 100.0
+        if nav_ts is None or nav_ts.empty:
+            initial = float(cfg.get("initial_investment", 1.0))
+            nav_ts = performance.nav_trajectories(returns_ts, initial_investment=initial)
 
-        Visualizer.line_chart(
-            yield_ts_pct,
-            title="Yield over time",
-            ylabel="Yield (%)",
-            save_path=str(outdir / "yield_vs_time.png") if outdir else None,
-            show=show,
-        )
-    if nav_ts is not None:
-        Visualizer.line_chart(
-            nav_ts,
-            title="NAV over time",
-            ylabel="NAV (USD)",
-            save_path=str(outdir / "nav_vs_time.png") if outdir else None,
-            show=show,
-        )
+        if yield_ts_pct is not None and not yield_ts_pct.empty:
+            Visualizer.line_chart(
+                yield_ts_pct,
+                title="Yield over time",
+                ylabel="Yield (%)",
+                save_path=str(outdir / "yield_vs_time.png") if outdir else None,
+                show=show,
+            )
+        if nav_ts is not None and not nav_ts.empty:
+            Visualizer.line_chart(
+                nav_ts,
+                title="NAV over time",
+                ylabel="NAV (USD)",
+                save_path=str(outdir / "nav_vs_time.png") if outdir else None,
+                show=show,
+            )
+
+        if outdir and history_charts:
+            if "rolling_apy" in history_charts and "rolling_apy" in report_paths:
+                rolling_df = pd.read_csv(report_paths["rolling_apy"], parse_dates=["timestamp"])
+                for window in sorted(rolling_df["window"].unique()):
+                    pivot = (
+                        rolling_df[rolling_df["window"] == window]
+                        .pivot(index="timestamp", columns="name", values="rolling_apy")
+                        .sort_index()
+                    )
+                    if pivot.empty:
+                        continue
+                    Visualizer.line_chart(
+                        pivot * 100.0,
+                        title=f"Rolling APY ({window}-period)",
+                        ylabel="Rolling APY (%)",
+                        save_path=str(outdir / f"rolling_apy_{window}.png"),
+                        show=show,
+                    )
+            if "drawdowns" in history_charts and "drawdowns" in report_paths:
+                drawdown_df = pd.read_csv(report_paths["drawdowns"], parse_dates=["timestamp"])
+                pivot = drawdown_df.pivot(index="timestamp", columns="name", values="drawdown").sort_index()
+                if not pivot.empty:
+                    Visualizer.line_chart(
+                        pivot * 100.0,
+                        title="Drawdown trajectories",
+                        ylabel="Drawdown (%)",
+                        save_path=str(outdir / "drawdowns.png") if outdir else None,
+                        show=show,
+                    )
+            if "realised_vs_target" in history_charts and "realised_vs_target" in report_paths:
+                realised_df = pd.read_csv(report_paths["realised_vs_target"])
+                Visualizer.bar_realised_vs_target(
+                    realised_df,
+                    title="Realised vs target APY",
+                    save_path=str(outdir / "realised_vs_target.png"),
+                    show=show,
+                )
 
 
 if __name__ == "__main__":
