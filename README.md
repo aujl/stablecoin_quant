@@ -30,6 +30,19 @@ poetry run pytest -q
 - Override the demo config path with `STABLE_YIELD_CONFIG=/path/to/config.toml`
 - Export `CODEX_API_URL` and `CODEX_API_KEY` to experiment with Codex locally
 
+## Investor Quickstart
+
+Run the demo with sample historical returns to generate Net Asset Value (NAV) and yield curves:
+
+```bash
+poetry run python src/stable_yield_demo.py configs/demo.toml
+```
+
+The script applies `stable_yield_lab.performance.nav_curve` and `performance.yield_curve` to compute time-series performance.
+`Visualizer.plot_nav` and `Visualizer.plot_yield` render the NAV trajectory and annualized yields.
+A steadily rising NAV indicates compounding growth; falling or flat lines flag underperformance.
+For a step-by-step example, see [docs/investor_walkthrough.md](docs/investor_walkthrough.md).
+
 ## Codex Workflows
 
 GitHub workflows integrate with [Codex](https://github.com/features/copilot) for automated pull request
