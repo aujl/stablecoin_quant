@@ -12,7 +12,6 @@ from stable_yield_lab import (
     performance,
 )
 
-
 def test_nav_and_yield_trajectories(tmp_path: Path) -> None:
     csv_path = Path(__file__).resolve().parent.parent / "src" / "sample_yields.csv"
     returns = Pipeline([HistoricalCSVSource(str(csv_path))]).run_history()

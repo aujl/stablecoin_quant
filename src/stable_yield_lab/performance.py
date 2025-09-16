@@ -110,6 +110,7 @@ def nav_trajectories(returns: pd.DataFrame, *, initial_investment: float) -> pd.
     where :math:`r_{i,t}` are the asset's periodic simple returns. Missing
     returns are treated as zero performance for the corresponding period.
 
+
     Parameters
     ----------
     returns:
@@ -125,6 +126,7 @@ def nav_trajectories(returns: pd.DataFrame, *, initial_investment: float) -> pd.
     """
     if returns.empty:
         return returns.copy()
+
 
     growth = (1.0 + returns.fillna(0.0)).cumprod()
     return growth * float(initial_investment)
@@ -151,6 +153,7 @@ def yield_trajectories(returns: pd.DataFrame) -> pd.DataFrame:
     -------
     pandas.DataFrame
         Cumulative return for each asset as decimal fractions.
+
     """
     if returns.empty:
         return returns.copy()
