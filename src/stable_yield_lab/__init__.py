@@ -643,6 +643,68 @@ class Visualizer:
             plt.show()
 
     @staticmethod
+    def line_yield(
+        ts: pd.DataFrame,
+        title: str = "Yield Over Time",
+        *,
+        save_path: str | None = None,
+        show: bool = True,
+    ) -> None:
+        """Plot yield time series for one or multiple pools.
+
+        Parameters
+        ----------
+        ts:
+            DataFrame with datetime index and columns representing pools. Values
+            should be in decimal form (e.g. 0.05 for 5%).
+        title:
+            Chart title.
+        save_path:
+            Optional path to save the figure.
+        show:
+            Whether to display the figure.
+        """
+        if ts.empty:
+            return
+        plt = Visualizer._plt()
+        plt.figure(figsize=(10, 6))
+        for col in ts.columns:
+            plt.plot(ts.index, ts[col] * 100.0, label=str(col))
+        plt.xlabel("Date")
+        plt.ylabel("APY (%)")
+        plt.title(title)
+        if ts.shape[1] > 1:
+            plt.legend()
+        plt.tight_layout()
+        if save_path:
+            plt.savefig(save_path, bbox_inches="tight")
+        if show:
+            plt.show()
+
+    @staticmethod
+    def line_nav(
+        nav: pd.Series,
+        title: str = "Net Asset Value",
+        *,
+        save_path: str | None = None,
+        show: bool = True,
+    ) -> None:
+        """Plot net asset value time series."""
+        if nav.empty:
+            return
+        plt = Visualizer._plt()
+        plt.figure(figsize=(10, 6))
+        plt.plot(nav.index, nav.values)
+        plt.xlabel("Date")
+        plt.ylabel("NAV")
+        plt.title(title)
+        plt.tight_layout()
+        if save_path:
+            plt.savefig(save_path, bbox_inches="tight")
+        if show:
+            plt.show()
+
+    @staticmethod
     def bar_group_chain(
         df_group: pd.DataFrame,
         title: str = "APY (Kettenvergleich)",
