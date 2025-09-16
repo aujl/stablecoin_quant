@@ -89,9 +89,29 @@ def test_cross_section_report_history_outputs(tmp_path: Path, with_returns: bool
     # Realised vs target APY comparison
     realised = pd.read_csv(paths["realised_vs_target"])
     pool_a_realised = realised[realised["name"] == "PoolA"].iloc[0]
-    realised_expected = (1 + returns["PoolA"].mean()) ** 2 - 1
+    growth = (1 + returns["PoolA"]).prod()
+    realised_expected = growth ** (2 / returns["PoolA"].count()) - 1
     assert pool_a_realised["realised_apy"] == pytest.approx(realised_expected)
     assert pool_a_realised["target_apy"] == pytest.approx(0.03)
     assert pool_a_realised["realised_minus_target"] == pytest.approx(
         realised_expected - 0.03
     )
+
+
+def test_cross_section_report_requires_datetime_returns(tmp_path: Path) -> None:
+    repo = PoolRepository(
+        [
+            Pool(
+                name="PoolA",
+                chain="Ethereum",
+                stablecoin="USDC",
+                tvl_usd=1_000_000,
+                base_apy=0.03,
+            )
+        ]
+    )
+
+    returns = pd.DataFrame({"PoolA": [0.01, 0.02]}, index=[0, 1])
+
+    with pytest.raises(ValueError, match="returns must be indexed by timestamps"):
+        cross_section_report(repo, tmp_path, returns=returns)

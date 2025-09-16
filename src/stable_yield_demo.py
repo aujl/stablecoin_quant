@@ -128,7 +128,8 @@ def main() -> None:
 
     # Summaries
     by_chain = Metrics.groupby_chain(filtered)
-    top_n = int(cfg.get("reporting", {}).get("top_n", 10))
+    reporting_cfg = cfg.get("reporting", {})
+    top_n = int(reporting_cfg.get("top_n", 10))
     Metrics.top_n(filtered, n=top_n, key="base_apy")
 
     # Outputs
@@ -138,9 +139,16 @@ def main() -> None:
     charts = out.get("charts", [])
     history_charts = out.get("history_charts", [])
 
+    history_cfg = reporting_cfg.get("history", {})
+    history_enabled = bool(history_cfg.get("enabled", False))
+    rolling_windows_cfg = history_cfg.get("rolling_windows", [])
+    rolling_windows = tuple(int(w) for w in rolling_windows_cfg) if rolling_windows_cfg else (4, 12)
+    periods_per_year = int(history_cfg.get("periods_per_year", 52))
+    target_field = str(history_cfg.get("target_field", "net_apy"))
+
     # Load historical returns once for reuse
     returns_ts = pd.DataFrame()
-    if cfg.get("yields_csv"):
+    if history_enabled and cfg.get("yields_csv"):
         hist_src = HistoricalCSVSource(str(cfg["yields_csv"]))
         returns_ts = Pipeline([hist_src]).run_history()
 
@@ -152,14 +160,6 @@ def main() -> None:
         frontier = risk_metrics.efficient_frontier(returns)
     except Exception as exc:
         print(f"Skipping risk metrics: {exc}")
-
-    reporting_cfg = cfg.get("reporting", {})
-    history_cfg = reporting_cfg.get("history", {})
-    history_enabled = bool(history_cfg.get("enabled", False))
-    rolling_windows_cfg = history_cfg.get("rolling_windows", [])
-    rolling_windows = tuple(int(w) for w in rolling_windows_cfg) if rolling_windows_cfg else (4, 12)
-    periods_per_year = int(history_cfg.get("periods_per_year", 52))
-    target_field = str(history_cfg.get("target_field", "net_apy"))
 
     report_paths: dict[str, Path] = {}
 
