@@ -6,6 +6,8 @@ import tomllib
 from pathlib import Path
 from typing import Any, cast
 
+import pandas as pd
+
 from stable_yield_lab import (
     CSVSource,
     HistoricalCSVSource,
@@ -44,8 +46,23 @@ def load_config(path: str | Path | None) -> dict[str, Any]:
             # "chains": ["Ethereum"],
             # "stablecoins": ["USDC"]
         },
-        "output": {"outdir": None, "show": True, "charts": ["bar", "scatter", "chain"]},
-        "reporting": {"top_n": 10, "perf_fee_bps": 0.0, "mgmt_fee_bps": 0.0},
+        "output": {
+            "outdir": None,
+            "show": True,
+            "charts": ["bar", "scatter", "chain"],
+            "history_charts": ["rolling_apy", "drawdowns"],
+        },
+        "reporting": {
+            "top_n": 10,
+            "perf_fee_bps": 0.0,
+            "mgmt_fee_bps": 0.0,
+            "history": {
+                "enabled": True,
+                "rolling_windows": [4, 12],
+                "periods_per_year": 52,
+                "target_field": "net_apy",
+            },
+        },
     }
 
     cfg_path = Path(path) if path else None
@@ -119,6 +136,13 @@ def main() -> None:
     outdir = Path(out.get("outdir") or "") if out.get("outdir") else None
     show = bool(out.get("show", True)) if not outdir else False
     charts = out.get("charts", [])
+    history_charts = out.get("history_charts", [])
+
+    # Load historical returns once for reuse
+    returns_ts = pd.DataFrame()
+    if cfg.get("yields_csv"):
+        hist_src = HistoricalCSVSource(str(cfg["yields_csv"]))
+        returns_ts = Pipeline([hist_src]).run_history()
 
     # Risk metrics derived from time-series returns (base APY as placeholder)
     returns = df.pivot_table(index="timestamp", columns="name", values="base_apy")
@@ -129,14 +153,28 @@ def main() -> None:
     except Exception as exc:
         print(f"Skipping risk metrics: {exc}")
 
+    reporting_cfg = cfg.get("reporting", {})
+    history_cfg = reporting_cfg.get("history", {})
+    history_enabled = bool(history_cfg.get("enabled", False))
+    rolling_windows_cfg = history_cfg.get("rolling_windows", [])
+    rolling_windows = tuple(int(w) for w in rolling_windows_cfg) if rolling_windows_cfg else (4, 12)
+    periods_per_year = int(history_cfg.get("periods_per_year", 52))
+    target_field = str(history_cfg.get("target_field", "net_apy"))
+
+    report_paths: dict[str, Path] = {}
+
     if outdir:
         outdir.mkdir(parents=True, exist_ok=True)
-        cross_section_report(
+        report_paths = cross_section_report(
             filtered,
             outdir,
             perf_fee_bps=float(cfg.get("reporting", {}).get("perf_fee_bps", 0.0)),
             mgmt_fee_bps=float(cfg.get("reporting", {}).get("mgmt_fee_bps", 0.0)),
             top_n=top_n,
+            returns=returns_ts if history_enabled and not returns_ts.empty else None,
+            rolling_windows=rolling_windows,
+            periods_per_year=periods_per_year,
+            target_field=target_field,
         )
         if stats is not None:
             stats.to_csv(outdir / "risk_stats.csv")
@@ -167,9 +205,7 @@ def main() -> None:
         )
 
     # Performance trajectories from historical yields
-    if cfg.get("yields_csv"):
-        hist_src = HistoricalCSVSource(str(cfg["yields_csv"]))
-        returns_ts = Pipeline([hist_src]).run_history()
+    if history_enabled and not returns_ts.empty:
         initial = float(cfg.get("initial_investment", 1.0))
         nav_ts = performance.nav_trajectories(returns_ts, initial_investment=initial)
         yield_ts = performance.yield_trajectories(returns_ts) * 100.0
@@ -187,6 +223,44 @@ def main() -> None:
             save_path=str(outdir / "nav_vs_time.png") if outdir else None,
             show=show,
         )
+
+        if outdir and history_charts:
+            if "rolling_apy" in history_charts and "rolling_apy" in report_paths:
+                rolling_df = pd.read_csv(report_paths["rolling_apy"], parse_dates=["timestamp"])
+                for window in sorted(rolling_df["window"].unique()):
+                    pivot = (
+                        rolling_df[rolling_df["window"] == window]
+                        .pivot(index="timestamp", columns="name", values="rolling_apy")
+                        .sort_index()
+                    )
+                    if pivot.empty:
+                        continue
+                    Visualizer.line_chart(
+                        pivot * 100.0,
+                        title=f"Rolling APY ({window}-period)",
+                        ylabel="Rolling APY (%)",
+                        save_path=str(outdir / f"rolling_apy_{window}.png"),
+                        show=show,
+                    )
+            if "drawdowns" in history_charts and "drawdowns" in report_paths:
+                drawdown_df = pd.read_csv(report_paths["drawdowns"], parse_dates=["timestamp"])
+                pivot = drawdown_df.pivot(index="timestamp", columns="name", values="drawdown").sort_index()
+                if not pivot.empty:
+                    Visualizer.line_chart(
+                        pivot * 100.0,
+                        title="Drawdown trajectories",
+                        ylabel="Drawdown (%)",
+                        save_path=str(outdir / "drawdowns.png"),
+                        show=show,
+                    )
+            if "realised_vs_target" in history_charts and "realised_vs_target" in report_paths:
+                realised_df = pd.read_csv(report_paths["realised_vs_target"])
+                Visualizer.bar_realised_vs_target(
+                    realised_df,
+                    title="Realised vs target APY",
+                    save_path=str(outdir / "realised_vs_target.png"),
+                    show=show,
+                )
 
 
 if __name__ == "__main__":

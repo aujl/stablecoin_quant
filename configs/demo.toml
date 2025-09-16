@@ -16,8 +16,15 @@ stablecoins = []
 outdir = "docs"
 show = false
 charts = ["bar", "scatter", "chain"]
+history_charts = ["rolling_apy", "drawdowns", "realised_vs_target"]
 
 [reporting]
 top_n = 10
 perf_fee_bps = 0.0
 mgmt_fee_bps = 0.0
+
+[reporting.history]
+enabled = true
+rolling_windows = [4, 12]
+periods_per_year = 52
+target_field = "net_apy"
