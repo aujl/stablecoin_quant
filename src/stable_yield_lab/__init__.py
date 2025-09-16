@@ -22,7 +22,7 @@ import urllib.request
 import pandas as pd
 
 from . import performance, risk_scoring
-from .performance import cumulative_return, nav_series
+from .performance import APYEstimate, cumulative_return, estimate_pool_apy, nav_series
 
 
 # -----------------

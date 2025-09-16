@@ -89,3 +89,75 @@ def test_nav_series_defaults_and_empty() -> None:
     expected_returns = returns.mul(0.5, axis=1).sum(axis=1)
     expected_nav = (1.0 + expected_returns).cumprod()
     pd.testing.assert_series_equal(result, expected_nav)
+
+
+def test_estimate_pool_apy_daily_series_partial_window() -> None:
+    dates = pd.date_range("2024-01-01", periods=6, freq="D", tz="UTC")
+    returns = pd.Series(
+        [0.001, 0.002, 0.0015, -0.0005, 0.002, 0.001],
+        index=dates,
+        name="PoolX",
+    )
+
+    estimate = performance.estimate_pool_apy(
+        returns,
+        start=pd.Timestamp("2024-01-02", tz="UTC"),
+        end=pd.Timestamp("2024-01-05", tz="UTC"),
+        frequency="D",
+    )
+
+    window = returns.loc["2024-01-02":"2024-01-05"]
+    total = (1.0 + window).prod() - 1.0
+    periods = float(len(window))
+    annual_factor = 365.0 / periods
+    expected_gross = (1.0 + total) ** annual_factor - 1.0
+
+    assert estimate.window_start == window.index.min()
+    assert estimate.window_end == window.index.max()
+
+    summary = estimate.summary
+    assert summary.index.tolist() == ["PoolX"]
+    assert summary.loc["PoolX", "periods"] == pytest.approx(periods)
+    assert summary.loc["PoolX", "total_return"] == pytest.approx(total)
+    assert summary.loc["PoolX", "annualization_factor"] == pytest.approx(annual_factor)
+    assert summary.loc["PoolX", "gross_apy"] == pytest.approx(expected_gross)
+    assert summary.loc["PoolX", "net_apy"] == pytest.approx(expected_gross)
+
+
+def test_estimate_pool_apy_weekly_dataframe_with_fees() -> None:
+    dates = pd.date_range("2024-01-05", periods=4, freq="W-FRI", tz="UTC")
+    returns = pd.DataFrame(
+        {
+            "PoolA": [0.01, 0.012, 0.008, 0.009],
+            "PoolB": [0.015, 0.013, 0.012, 0.011],
+        },
+        index=dates,
+    )
+
+    estimate = performance.estimate_pool_apy(
+        returns,
+        frequency="W",
+        perf_fee_bps=200.0,
+        mgmt_fee_bps=100.0,
+    )
+
+    summary = estimate.summary
+    totals = (1.0 + returns).prod() - 1.0
+    periods = float(len(returns))
+    annual_factor = 52.0 / periods
+    expected_gross = (1.0 + totals) ** annual_factor - 1.0
+    fee_frac = 0.03
+    expected_net = (expected_gross * (1.0 - fee_frac)).clip(lower=-1.0)
+
+    pd.testing.assert_index_equal(summary.index, returns.columns)
+    assert summary["periods"].eq(periods).all()
+    pd.testing.assert_series_equal(summary["total_return"], totals, rtol=1e-12, atol=1e-12, check_names=False)
+    assert summary["annualization_factor"].eq(annual_factor).all()
+    pd.testing.assert_series_equal(summary["gross_apy"], expected_gross, rtol=1e-9, atol=1e-12, check_names=False)
+    pd.testing.assert_series_equal(summary["net_apy"], expected_net, rtol=1e-9, atol=1e-12, check_names=False)
+
+    assert estimate.performance_fee_bps == 200.0
+    assert estimate.management_fee_bps == 100.0
+    assert estimate.window_start == returns.index.min()
+    assert estimate.window_end == returns.index.max()
+    assert estimate.frequency == "W"

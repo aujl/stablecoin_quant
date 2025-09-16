@@ -8,7 +8,11 @@ compounding identity :math:`G_t = \prod_{i=1}^t (1 + r_i)`.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+from typing import Any
+
 import pandas as pd
+from pandas.tseries.frequencies import to_offset
 
 
 def cumulative_return(series: pd.Series) -> pd.Series:
@@ -158,3 +162,203 @@ def yield_trajectories(returns: pd.DataFrame) -> pd.DataFrame:
     if returns.empty:
         return returns.copy()
     return (1.0 + returns.fillna(0.0)).cumprod() - 1.0
+
+
+@dataclass(frozen=True)
+class APYEstimate:
+    r"""Structured APY estimate with metadata for downstream reporting."""
+
+    summary: pd.DataFrame
+    frequency: str
+    periods_per_year: float
+    window_start: pd.Timestamp
+    window_end: pd.Timestamp
+    performance_fee_bps: float
+    management_fee_bps: float
+
+    def to_frame(self) -> pd.DataFrame:
+        """Return a defensive copy of the summary table."""
+
+        return self.summary.copy()
+
+
+def estimate_pool_apy(
+    returns: pd.Series | pd.DataFrame,
+    *,
+    start: pd.Timestamp | str | None = None,
+    end: pd.Timestamp | str | None = None,
+    frequency: str = "D",
+    perf_fee_bps: float = 0.0,
+    mgmt_fee_bps: float = 0.0,
+) -> APYEstimate:
+    r"""Estimate annual percentage yield (APY) from periodic simple returns.
+
+    The function assumes discrete compounding with full reinvestment. Given
+    periodic simple returns :math:`r_t`, the cumulative growth over ``T``
+    observations is
+
+    .. math::
+       G_T = \prod_{t=1}^T (1 + r_t).
+
+    The corresponding sample return is ``G_T - 1``. To annualise the result we
+    exponentiate by the ratio of periods per year :math:`n_f` (inferred from the
+    provided ``frequency``) to the number of observed periods ``T``:
+
+    .. math::
+       \text{APY} = G_T^{n_f / T} - 1.
+
+    Performance and management fees supplied in basis points reduce the gross
+    APY by a multiplicative factor :math:`1 - (\text{perf} + \text{mgmt}) / 10^4`
+    with a floor at ``-100%``.
+
+    Parameters
+    ----------
+    returns:
+        Series or DataFrame of periodic simple returns indexed by
+        ``DatetimeIndex``.
+    start, end:
+        Optional inclusive temporal bounds. If the filtered window contains no
+        observations a ``ValueError`` is raised.
+    frequency:
+        Pandas offset alias used to infer the number of periods per year for
+        annualisation (e.g. ``"D"`` for daily, ``"W"`` for weekly).
+    perf_fee_bps, mgmt_fee_bps:
+        Optional fee adjustments expressed in basis points.
+
+    Returns
+    -------
+    APYEstimate
+        Structured summary with gross and net APY plus metadata for each input
+        series.
+    """
+
+    frame = _coerce_to_dataframe(returns)
+    if frame.empty:
+        raise ValueError("returns data is empty")
+
+    if not isinstance(frame.index, pd.DatetimeIndex):
+        raise TypeError("returns index must be a DatetimeIndex")
+
+    ordered = frame.sort_index()
+
+    start_ts = pd.Timestamp(start) if start is not None else None
+    end_ts = pd.Timestamp(end) if end is not None else None
+
+    if start_ts is not None and end_ts is not None and start_ts > end_ts:
+        raise ValueError("start must be on or before end")
+
+    if start_ts is not None:
+        ordered = ordered.loc[ordered.index >= start_ts]
+    if end_ts is not None:
+        ordered = ordered.loc[ordered.index <= end_ts]
+
+    ordered = ordered.dropna(how="all")
+    if ordered.empty:
+        raise ValueError("no returns available in the requested window")
+
+    window_start = ordered.index.min()
+    window_end = ordered.index.max()
+
+    periods_per_year = _periods_per_year(frequency)
+    fee_multiplier = 1.0 - (float(perf_fee_bps) + float(mgmt_fee_bps)) / 10_000.0
+
+    periods: dict[Any, float] = {}
+    totals: dict[Any, float] = {}
+    annualisation: dict[Any, float] = {}
+    gross: dict[Any, float] = {}
+    net: dict[Any, float] = {}
+
+    for column in ordered.columns:
+        series = ordered[column].dropna()
+        if series.empty:
+            periods[column] = float("nan")
+            totals[column] = float("nan")
+            annualisation[column] = float("nan")
+            gross[column] = float("nan")
+            net[column] = float("nan")
+            continue
+
+        compounded = cumulative_return(series)
+        total_return = float(compounded.iloc[-1])
+        observations = float(len(series))
+
+        periods[column] = observations
+        totals[column] = total_return
+
+        annual_factor = periods_per_year / observations
+        annualisation[column] = annual_factor
+
+        gross_apy = (1.0 + total_return) ** annual_factor - 1.0
+        gross[column] = gross_apy
+
+        net_apy = gross_apy * fee_multiplier
+        if net_apy < -1.0:
+            net_apy = -1.0
+        net[column] = net_apy
+
+    summary = pd.DataFrame(
+        {
+            "periods": pd.Series(periods, dtype=float),
+            "total_return": pd.Series(totals, dtype=float),
+            "annualization_factor": pd.Series(annualisation, dtype=float),
+            "gross_apy": pd.Series(gross, dtype=float),
+            "net_apy": pd.Series(net, dtype=float),
+        }
+    )
+    summary = summary.reindex(ordered.columns)
+
+    return APYEstimate(
+        summary=summary,
+        frequency=frequency,
+        periods_per_year=periods_per_year,
+        window_start=window_start,
+        window_end=window_end,
+        performance_fee_bps=float(perf_fee_bps),
+        management_fee_bps=float(mgmt_fee_bps),
+    )
+
+
+def _coerce_to_dataframe(returns: pd.Series | pd.DataFrame) -> pd.DataFrame:
+    if isinstance(returns, pd.Series):
+        name = returns.name or "value"
+        return returns.to_frame(name=name)
+    return returns.copy()
+
+
+def _periods_per_year(freq: str) -> float:
+    try:
+        offset = to_offset(freq)
+    except ValueError as exc:
+        raise ValueError(f"invalid frequency alias: {freq!r}") from exc
+
+    rule = getattr(offset, "rule_code", None)
+    base_code = (rule or offset.freqstr).upper()
+    if "-" in base_code:
+        base_code = base_code.split("-")[0]
+    base_code = base_code.rstrip("S")
+
+    mapping: dict[str, float] = {
+        "B": 252.0,
+        "D": 365.0,
+        "W": 52.0,
+        "M": 12.0,
+        "Q": 4.0,
+        "A": 1.0,
+        "Y": 1.0,
+    }
+
+    multiplier = float(getattr(offset, "n", 1))
+    if base_code in mapping:
+        return mapping[base_code] / multiplier
+
+    nanos = getattr(offset, "nanos", None)
+    if nanos:
+        year = pd.Timedelta(days=365)
+        return float(year / pd.Timedelta(nanos, unit="ns"))
+
+    delta = getattr(offset, "delta", None)
+    if delta:
+        year = pd.Timedelta(days=365)
+        return float(year / delta)
+
+    raise ValueError(f"unsupported frequency for annualisation: {freq!r}")
