@@ -6,14 +6,37 @@ import tomllib
 from pathlib import Path
 from typing import Any, cast
 
-from stable_yield_lab import CSVSource, Metrics, Pipeline, Visualizer, risk_metrics
+from stable_yield_lab import (
+    CSVSource,
+    HistoricalCSVSource,
+    Metrics,
+    Pipeline,
+    Visualizer,
+    performance,
+    risk_metrics,
+)
 from stable_yield_lab.reporting import cross_section_report
 
 
 def load_config(path: str | Path | None) -> dict[str, Any]:
+    """Load configuration from a TOML file and merge with defaults.
+
+    Parameters
+    ----------
+    path:
+        Optional path to a configuration file. When ``None`` or missing, the
+        built-in defaults are used.
+
+    Returns
+    -------
+    dict[str, Any]
+        Configuration dictionary with any file overrides applied.
+    """
 
     default = {
         "csv": {"path": str(Path(__file__).with_name("sample_pools.csv"))},
+        "yields_csv": str(Path(__file__).with_name("sample_yields.csv")),
+        "initial_investment": 1_000.0,
         "filters": {
             "min_tvl": 100_000,
             "min_base_apy": 0.06,
@@ -52,6 +75,7 @@ def load_config(path: str | Path | None) -> dict[str, Any]:
 
 
 def main() -> None:
+    """Run the demo using configuration from file or environment variables."""
     cfg_file = os.getenv("STABLE_YIELD_CONFIG") or (sys.argv[1] if len(sys.argv) > 1 else None)
     cfg = load_config(cfg_file)
 
@@ -59,6 +83,13 @@ def main() -> None:
         cfg.setdefault("csv", {})["path"] = csv_env
     if outdir_env := os.getenv("STABLE_YIELD_OUTDIR"):
         cfg.setdefault("output", {})["outdir"] = outdir_env
+    if yields_env := os.getenv("STABLE_YIELD_YIELDS_CSV"):
+        cfg["yields_csv"] = yields_env
+    if init_env := os.getenv("STABLE_YIELD_INITIAL_INVESTMENT"):
+        try:
+            cfg["initial_investment"] = float(init_env)
+        except ValueError:
+            pass
 
     # Load data
     csv_path = cfg["csv"]["path"]
@@ -95,7 +126,7 @@ def main() -> None:
     try:
         stats = risk_metrics.summary_statistics(returns)
         frontier = risk_metrics.efficient_frontier(returns)
-    except RuntimeError as exc:
+    except Exception as exc:
         print(f"Skipping risk metrics: {exc}")
 
     if outdir:
@@ -132,6 +163,28 @@ def main() -> None:
             by_chain,
             title="TVL‑gewichteter Base‑APY je Chain",
             save_path=str(outdir / "bar_group_chain.png") if outdir else None,
+            show=show,
+        )
+
+    # Performance trajectories from historical yields
+    if cfg.get("yields_csv"):
+        hist_src = HistoricalCSVSource(str(cfg["yields_csv"]))
+        returns_ts = Pipeline([hist_src]).run_history()
+        initial = float(cfg.get("initial_investment", 1.0))
+        nav_ts = performance.nav_trajectories(returns_ts, initial_investment=initial)
+        yield_ts = performance.yield_trajectories(returns_ts) * 100.0
+        Visualizer.line_chart(
+            yield_ts,
+            title="Yield over time",
+            ylabel="Yield (%)",
+            save_path=str(outdir / "yield_vs_time.png") if outdir else None,
+            show=show,
+        )
+        Visualizer.line_chart(
+            nav_ts,
+            title="NAV over time",
+            ylabel="NAV (USD)",
+            save_path=str(outdir / "nav_vs_time.png") if outdir else None,
             show=show,
         )
 

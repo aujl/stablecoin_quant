@@ -1,3 +1,7 @@
+
+initial_investment = 1000.0
+yields_csv = "src/sample_yields.csv"
+
 [csv]
 path = "src/sample_pools.csv"
 
@@ -9,7 +13,7 @@ chains = []
 stablecoins = []
 
 [output]
-outdir = "outputs"
+outdir = "docs"
 show = false
 charts = ["bar", "scatter", "chain"]
 

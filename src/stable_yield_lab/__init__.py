@@ -21,7 +21,7 @@ import logging
 import urllib.request
 import pandas as pd
 
-from . import risk_scoring
+from . import performance, risk_scoring
 
 # -----------------
 # Data Model
@@ -663,6 +663,48 @@ class Visualizer:
         if show:
             plt.show()
 
+    @staticmethod
+    def line_chart(
+        data: pd.DataFrame | pd.Series,
+        *,
+        title: str,
+        ylabel: str,
+        save_path: str | None = None,
+        show: bool = True,
+    ) -> None:
+        """Plot time-series data as a line chart.
+
+        Parameters
+        ----------
+        data:
+            Series or DataFrame indexed by timestamp.
+        title:
+            Plot title.
+        ylabel:
+            Label for the y-axis.
+        save_path:
+            Optional path to save the figure. If ``None``, the plot is not saved.
+        show:
+            Display the plot window when ``True``.
+        """
+        df = data.to_frame() if isinstance(data, pd.Series) else data
+        if df.empty:
+            return
+        plt = Visualizer._plt()
+        plt.figure(figsize=(10, 6))
+        for col in df.columns:
+            plt.plot(df.index, df[col], label=col)
+        if len(df.columns) > 1:
+            plt.legend()
+        plt.xlabel("Date")
+        plt.ylabel(ylabel)
+        plt.title(title)
+        plt.tight_layout()
+        if save_path:
+            plt.savefig(save_path, bbox_inches="tight")
+        if show:
+            plt.show()
+
 
 # -----------------
 # Pipeline
@@ -715,4 +757,5 @@ __all__ = [
     "reporting",
     "portfolio",
     "risk_scoring",
+    "performance",
 ]
