@@ -11,6 +11,18 @@ from stable_yield_lab import (
     nav_series,
     performance,
 )
+from stable_yield_lab.performance import RebalanceScenario, run_rebalance_scenarios
+
+
+def _sample_returns() -> pd.DataFrame:
+    dates = pd.date_range("2024-01-01", periods=6, freq="D", tz="UTC")
+    return pd.DataFrame(
+        {
+            "PoolA": [0.012, -0.018, 0.009, -0.004, 0.011, -0.007],
+            "PoolB": [0.0, 0.021, -0.012, 0.007, -0.01, 0.016],
+        },
+        index=dates,
+    )
 
 def test_nav_and_yield_trajectories(tmp_path: Path) -> None:
     csv_path = Path(__file__).resolve().parent.parent / "src" / "sample_yields.csv"
@@ -89,3 +101,75 @@ def test_nav_series_defaults_and_empty() -> None:
     expected_returns = returns.mul(0.5, axis=1).sum(axis=1)
     expected_nav = (1.0 + expected_returns).cumprod()
     pd.testing.assert_series_equal(result, expected_nav)
+
+
+@pytest.mark.parametrize(
+    ("calendar_slice", "expect_tracking_zero"),
+    [(slice(None), True), (slice(None, None, 2), False)],
+)
+def test_run_rebalance_scenarios_tracking_error(calendar_slice, expect_tracking_zero) -> None:
+    returns = _sample_returns()
+    weights = pd.Series({"PoolA": 0.6, "PoolB": 0.4})
+
+    calendars = {
+        "baseline": RebalanceScenario(calendar=returns.index, cost_bps=0.0),
+        "candidate": RebalanceScenario(calendar=returns.index[calendar_slice], cost_bps=0.0),
+    }
+
+    summary = run_rebalance_scenarios(
+        returns,
+        weights,
+        calendars,
+        benchmark="baseline",
+        initial_nav=100.0,
+    )
+
+    metrics = summary.metrics
+    assert set(metrics.columns) >= {"realized_apy", "total_cost", "tracking_error", "terminal_nav"}
+    assert list(summary.navs.columns) == ["baseline", "candidate"]
+    assert list(summary.returns.columns) == ["baseline", "candidate"]
+
+    baseline_apy = metrics.loc["baseline", "realized_apy"]
+    candidate_apy = metrics.loc["candidate", "realized_apy"]
+    tracking_error = metrics.loc["candidate", "tracking_error"]
+
+    if expect_tracking_zero:
+        assert tracking_error == pytest.approx(0.0, abs=1e-12)
+        assert candidate_apy == pytest.approx(baseline_apy)
+    else:
+        assert tracking_error > 0.0
+        assert candidate_apy != pytest.approx(baseline_apy)
+
+
+@pytest.mark.parametrize("cost_bps", [0.0, 25.0])
+def test_run_rebalance_scenarios_costs(cost_bps: float) -> None:
+    returns = _sample_returns()
+    weights = pd.Series({"PoolA": 0.5, "PoolB": 0.5})
+
+    scenarios = {
+        "zero_cost": RebalanceScenario(calendar=returns.index, cost_bps=0.0),
+        "test": RebalanceScenario(calendar=returns.index, cost_bps=cost_bps),
+    }
+
+    summary = run_rebalance_scenarios(
+        returns,
+        weights,
+        scenarios,
+        benchmark="zero_cost",
+        initial_nav=100.0,
+    )
+
+    metrics = summary.metrics
+    zero_cost_apy = metrics.loc["zero_cost", "realized_apy"]
+    test_apy = metrics.loc["test", "realized_apy"]
+    total_cost = metrics.loc["test", "total_cost"]
+    tracking_error = metrics.loc["test", "tracking_error"]
+
+    if cost_bps == 0.0:
+        assert total_cost == pytest.approx(0.0)
+        assert tracking_error == pytest.approx(0.0, abs=1e-12)
+        assert test_apy == pytest.approx(zero_cost_apy)
+    else:
+        assert total_cost > 0.0
+        assert tracking_error > 0.0
+        assert test_apy < zero_cost_apy

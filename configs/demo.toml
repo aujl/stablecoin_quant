@@ -21,3 +21,19 @@ charts = ["bar", "scatter", "chain"]
 top_n = 10
 perf_fee_bps = 0.0
 mgmt_fee_bps = 0.0
+
+[rebalance]
+benchmark = "weekly"
+selected = ["daily", "weekly", "monthly"]
+
+[rebalance.scenarios.daily]
+cadence = "1D"
+cost_bps = 0.0
+
+[rebalance.scenarios.weekly]
+cadence = "1W"
+cost_bps = 1.5
+
+[rebalance.scenarios.monthly]
+cadence = "1M"
+cost_bps = 3.0

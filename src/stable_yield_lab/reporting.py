@@ -5,6 +5,7 @@ from pathlib import Path
 import pandas as pd
 
 from . import Metrics, PoolRepository
+from .performance import ScenarioRunResult
 
 
 def _ensure_outdir(outdir: str | Path) -> Path:
@@ -87,5 +88,32 @@ def cross_section_report(
     )
     paths["concentration"] = out / "concentration.csv"
     conc_all.to_csv(paths["concentration"], index=False)
+
+    return paths
+
+
+def scenario_comparison_report(
+    summary: ScenarioRunResult,
+    outdir: str | Path,
+    *,
+    prefix: str = "rebalance",
+) -> dict[str, Path]:
+    """Persist scenario runner outputs to CSV files."""
+
+    out = _ensure_outdir(outdir)
+    paths: dict[str, Path] = {}
+
+    metrics_path = out / f"{prefix}_metrics.csv"
+    metrics = summary.metrics.reset_index()
+    metrics.to_csv(metrics_path, index=False)
+    paths["metrics"] = metrics_path
+
+    nav_path = out / f"{prefix}_nav.csv"
+    summary.navs.to_csv(nav_path)
+    paths["nav"] = nav_path
+
+    returns_path = out / f"{prefix}_returns.csv"
+    summary.returns.to_csv(returns_path)
+    paths["returns"] = returns_path
 
     return paths
