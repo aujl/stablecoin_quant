@@ -15,14 +15,15 @@ from collections.abc import Iterable, Iterator
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any, Literal, Protocol
 import json
 import logging
+import warnings
 import urllib.request
 import pandas as pd
 
 from . import performance, risk_scoring
-from .performance import APYEstimate, cumulative_return, estimate_pool_apy, nav_series
+from .performance import APYEstimate, cumulative_return, estimate_pool_apy, horizon_apys, nav_series
 
 
 # -----------------
@@ -46,11 +47,7 @@ class Pool:
     def to_dict(self) -> dict[str, Any]:
         d = asdict(self)
         # for readability in CSV
-        d["timestamp_iso"] = (
-            datetime.fromtimestamp(self.timestamp or 0, tz=UTC).isoformat()
-            if self.timestamp
-            else ""
-        )
+        d["timestamp_iso"] = datetime.fromtimestamp(self.timestamp or 0, tz=UTC).isoformat() if self.timestamp else ""
         return d
 
 
@@ -136,6 +133,30 @@ class ReturnRepository:
         return df.pivot(index="timestamp", columns="name", values="period_return").sort_index()
 
 
+class DataQualityWarning(UserWarning):
+    """Warning raised when historical data required gap-filling."""
+
+
+class DataQualityError(RuntimeError):
+    """Raised when historical data does not meet minimum quality thresholds."""
+
+
+@dataclass(frozen=True)
+class MissingDataDiagnostics:
+    """Summary statistics for the gap-filling applied to a pool's history."""
+
+    name: str
+    start: pd.Timestamp
+    end: pd.Timestamp
+    expected_periods: int
+    observed_periods: int
+    missing_periods: int
+    filled_periods: int
+    remaining_missing: int
+    fill_strategy: str
+    frequency: str | None
+
+
 # -----------------
 # Data Sources API
 # -----------------
@@ -175,11 +196,60 @@ class CSVSource:
         return pools
 
 
-class HistoricalCSVSource:
-    """Load periodic returns from a CSV with timestamp, name and period_return."""
+FillStrategy = Literal["none", "ffill", "bfill", "ffill_bfill", "zero", "ffill_zero"]
 
-    def __init__(self, path: str) -> None:
+
+class HistoricalCSVSource:
+    """Load periodic returns and normalise them to a desired sampling frequency.
+
+    The source consolidates multiple protocol histories into a single, regularised
+    panel by applying the following steps:
+
+    1. read the CSV input (``timestamp``, ``name``, ``period_return`` columns),
+    2. pivot to a wide DataFrame keyed by timestamp and protocol name,
+    3. resample to ``target_frequency`` to ensure consistent spacing,
+    4. fill gaps according to ``fill_strategy`` (forward/back fill or zeros), and
+    5. record diagnostics about missing periods and applied imputations.
+
+    ``period_return`` is assumed to be the return realised over the resampled
+    interval (e.g. weekly APY converted to per-period return). The class does not
+    attempt to annualise or otherwise transform the supplied values; it only
+    normalises the time axis.
+    """
+
+    def __init__(
+        self,
+        path: str,
+        *,
+        target_frequency: str | None = "W-MON",
+        fill_strategy: FillStrategy = "ffill_bfill",
+        min_observations: int = 1,
+    ) -> None:
+        if min_observations < 0:
+            raise ValueError("min_observations must be non-negative")
         self.path = path
+        self.target_frequency = target_frequency
+        self.fill_strategy = fill_strategy
+        self.min_observations = min_observations
+        self.last_diagnostics: dict[str, MissingDataDiagnostics] = {}
+
+    def _apply_fill(self, series: pd.Series) -> pd.Series:
+        """Return a copy of ``series`` with missing values imputed."""
+
+        strategy = self.fill_strategy
+        if strategy == "none":
+            return series.copy()
+        if strategy == "ffill":
+            return series.ffill()
+        if strategy == "bfill":
+            return series.bfill()
+        if strategy == "ffill_bfill":
+            return series.ffill().bfill()
+        if strategy == "zero":
+            return series.fillna(0.0)
+        if strategy == "ffill_zero":
+            return series.ffill().fillna(0.0)
+        raise ValueError(f"Unsupported fill_strategy: {strategy}")
 
     def fetch(self) -> list[PoolReturn]:
         df = pd.read_csv(self.path)
@@ -187,15 +257,105 @@ class HistoricalCSVSource:
         missing = required.difference(df.columns)
         if missing:
             raise ValueError(f"CSV missing columns: {missing}")
-        df["timestamp"] = pd.to_datetime(df["timestamp"], utc=True)
-        rows = [
-            PoolReturn(
-                name=str(r["name"]),
-                timestamp=pd.Timestamp(r["timestamp"]),
-                period_return=float(r["period_return"]),
+
+        df["timestamp"] = pd.to_datetime(df["timestamp"], utc=True, errors="coerce")
+        if df["timestamp"].isna().any():
+            raise ValueError("CSV contains invalid timestamps")
+        df["name"] = df["name"].astype(str)
+        df["period_return"] = pd.to_numeric(df["period_return"], errors="coerce")
+        df = df.sort_values(["timestamp", "name"])
+
+        pivot = df.pivot_table(
+            index="timestamp",
+            columns="name",
+            values="period_return",
+            aggfunc="last",
+        ).sort_index()
+        if pivot.empty:
+            self.last_diagnostics = {}
+            return []
+
+        if self.target_frequency:
+            pivot = pivot.resample(self.target_frequency).mean()
+
+        diagnostics: dict[str, MissingDataDiagnostics] = {}
+        filled_df = pd.DataFrame(index=pivot.index)
+        filled_df.index.name = "timestamp"
+        warning_payload: list[tuple[str, int, int, int]] = []
+        freq = self.target_frequency
+
+        for name in pivot.columns:
+            series = pivot[name].astype(float)
+            expected = int(len(series))
+            if expected == 0:
+                diagnostics[name] = MissingDataDiagnostics(
+                    name=name,
+                    start=pd.NaT,
+                    end=pd.NaT,
+                    expected_periods=0,
+                    observed_periods=0,
+                    missing_periods=0,
+                    filled_periods=0,
+                    remaining_missing=0,
+                    fill_strategy=self.fill_strategy,
+                    frequency=freq,
+                )
+                filled_df[name] = series
+                continue
+
+            observed = int(series.notna().sum())
+            if observed < self.min_observations:
+                raise DataQualityError(
+                    f"Pool {name} has {observed} observation(s); minimum required is {self.min_observations}"
+                )
+
+            filled_series = self._apply_fill(series)
+            missing_periods = expected - observed
+            remaining_missing = int(filled_series.isna().sum())
+            filled_periods = missing_periods - remaining_missing
+
+            diagnostics[name] = MissingDataDiagnostics(
+                name=name,
+                start=series.index.min(),
+                end=series.index.max(),
+                expected_periods=expected,
+                observed_periods=observed,
+                missing_periods=missing_periods,
+                filled_periods=filled_periods,
+                remaining_missing=remaining_missing,
+                fill_strategy=self.fill_strategy,
+                frequency=freq,
             )
-            for _, r in df.iterrows()
-        ]
+
+            filled_df[name] = filled_series
+            if missing_periods > 0:
+                warning_payload.append((name, missing_periods, filled_periods, remaining_missing))
+
+        self.last_diagnostics = diagnostics
+
+        for name, missing_periods, filled_periods, remaining_missing in warning_payload:
+            warnings.warn(
+                (
+                    f"Pool {name} missing {missing_periods} period(s); "
+                    f"filled {filled_periods} using {self.fill_strategy}; "
+                    f"remaining missing {remaining_missing}"
+                ),
+                DataQualityWarning,
+                stacklevel=2,
+            )
+
+        melted = filled_df.reset_index().melt(id_vars="timestamp", var_name="name", value_name="period_return")
+        rows: list[PoolReturn] = []
+        for _, row in melted.iterrows():
+            value = row["period_return"]
+            period_return = float(value) if pd.notna(value) else float("nan")
+            rows.append(
+                PoolReturn(
+                    name=str(row["name"]),
+                    timestamp=pd.Timestamp(row["timestamp"]),
+                    period_return=period_return,
+                )
+            )
         return rows
 
 
@@ -386,9 +546,7 @@ class BeefySource:
             if v.get("status") != "active":
                 continue
             assets = v.get("assets") or []
-            if not assets or not all(
-                a.upper() in STABLE_TOKENS or "USD" in a.upper() for a in assets
-            ):
+            if not assets or not all(a.upper() in STABLE_TOKENS or "USD" in a.upper() for a in assets):
                 continue
             chain = str(v.get("chain", ""))
             chain_id = self.CHAIN_IDS.get(chain.lower(), chain)
@@ -446,8 +604,7 @@ class Metrics:
                 apr_avg=("base_apy", "mean"),
                 apr_wavg=(
                     "base_apy",
-                    lambda x: (x * df.loc[x.index, "tvl_usd"]).sum()
-                    / df.loc[x.index, "tvl_usd"].sum(),
+                    lambda x: (x * df.loc[x.index, "tvl_usd"]).sum() / df.loc[x.index, "tvl_usd"].sum(),
                 ),
             )
             .reset_index()
@@ -536,9 +693,7 @@ class Visualizer:
         try:
             import matplotlib.pyplot as plt
         except Exception as exc:  # pragma: no cover
-            raise RuntimeError(
-                "matplotlib is required for visualization. Install via Poetry or pip."
-            ) from exc
+            raise RuntimeError("matplotlib is required for visualization. Install via Poetry or pip.") from exc
         return plt
 
     @staticmethod
@@ -808,6 +963,9 @@ __all__ = [
     "PoolRepository",
     "PoolReturn",
     "ReturnRepository",
+    "MissingDataDiagnostics",
+    "DataQualityWarning",
+    "DataQualityError",
     "DataSource",
     "CSVSource",
     "HistoricalCSVSource",

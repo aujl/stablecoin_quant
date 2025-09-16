@@ -8,8 +8,10 @@ compounding identity :math:`G_t = \prod_{i=1}^t (1 + r_i)`.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Any
+from numbers import Integral
+from typing import Any, Literal
 
 import pandas as pd
 from pandas.tseries.frequencies import to_offset
@@ -362,3 +364,147 @@ def _periods_per_year(freq: str) -> float:
         return float(year / delta)
 
     raise ValueError(f"unsupported frequency for annualisation: {freq!r}")
+
+
+def horizon_apys(
+    trajectory: pd.DataFrame | pd.Series,
+    *,
+    lookbacks: Mapping[str, int | str | pd.Timedelta],
+    value_type: Literal["nav", "yield"] = "nav",
+    periods_per_year: float | None = None,
+) -> pd.DataFrame:
+    r"""Convert NAV or cumulative yield paths into annualised realised APYs.
+
+    For a lookback window of length :math:`L` (in years) the realised annual
+    percentage yield (APY) is computed from the growth factor :math:`G`
+    observed over the window:
+
+    .. math::
+       \text{APY} = G^{1/L} - 1, \qquad G = \frac{\text{NAV}_{t}}{\text{NAV}_{t-L}}.
+
+    The function accepts NAV trajectories (level data) or cumulative yields. In
+    the latter case the input is first converted into NAV space via
+    ``1 + cumulative_yield`` so that growth factors remain comparable across
+    pools regardless of the initial capital. Lookbacks may be provided either
+    as positive integers (number of periods) or as pandas-compatible
+    ``Timedelta`` specifications such as ``"52W"`` or ``"90D"``.
+
+    Parameters
+    ----------
+    trajectory:
+        NAV levels or cumulative yields indexed by time with one column per
+        asset.
+    lookbacks:
+        Mapping of human-readable labels to lookback definitions. Integer
+        values are interpreted as a number of observation periods; strings and
+        :class:`~pandas.Timedelta` objects are converted via
+        :func:`pandas.to_timedelta`.
+    value_type:
+        ``"nav"`` when ``trajectory`` already represents NAV levels, or
+        ``"yield"`` when the input is cumulative yield (``G - 1``).
+    periods_per_year:
+        Optional frequency override used when lookbacks are specified in
+        integer periods and cannot be inferred from the index. If omitted the
+        function attempts to infer the observation frequency from a
+        ``DatetimeIndex``.
+
+    Returns
+    -------
+    pandas.DataFrame
+        Realised APYs expressed as decimal fractions. The rows correspond to
+        asset names (trajectory columns) and columns align with the provided
+        ``lookbacks`` labels.
+
+    Raises
+    ------
+    ValueError
+        If an integer lookback is provided without a resolvable
+        ``periods_per_year`` and the index frequency cannot be inferred, or if
+        any lookback definition is non-positive.
+    TypeError
+        When a time-based lookback is requested but the index is not a
+        ``DatetimeIndex``.
+    """
+
+    if isinstance(trajectory, pd.Series):
+        name = trajectory.name or "value"
+        data = trajectory.astype(float).to_frame(name=name)
+    else:
+        data = trajectory.astype(float)
+
+    if data.empty:
+        return pd.DataFrame(index=data.columns, columns=list(lookbacks.keys()), dtype=float)
+
+    if not lookbacks:
+        return pd.DataFrame(index=data.columns, dtype=float)
+
+    nav = data.sort_index()
+    nav = nav.astype(float)
+
+    value_type = value_type.lower()
+    if value_type == "yield":
+        nav = 1.0 + nav
+    elif value_type != "nav":
+        raise ValueError(f"Unsupported value_type '{value_type}'. Use 'nav' or 'yield'.")
+
+    idx = nav.index
+    period_length: pd.Timedelta | None = None
+    if isinstance(idx, pd.DatetimeIndex) and len(idx) >= 2:
+        diffs = idx.to_series().diff().dropna()
+        if not diffs.empty:
+            median = diffs.median()
+            if pd.notna(median) and median > pd.Timedelta(0):
+                period_length = pd.Timedelta(median)
+
+    per_year = float(periods_per_year) if periods_per_year is not None else None
+    if per_year is None and period_length is not None:
+        per_year = float(pd.Timedelta(days=365) / period_length)
+
+    assets = list(nav.columns)
+    result = pd.DataFrame(index=assets, columns=list(lookbacks.keys()), dtype=float)
+    latest = nav.iloc[-1]
+
+    year_td = pd.Timedelta(days=365)
+
+    for label, raw_lookback in lookbacks.items():
+        if isinstance(raw_lookback, Integral):
+            periods = int(raw_lookback)
+            if periods <= 0:
+                raise ValueError(f"Lookback '{label}' must be positive; received {periods}.")
+            if len(nav) <= periods:
+                continue
+            base = nav.iloc[-(periods + 1)]
+            if per_year is None:
+                raise ValueError(
+                    "periods_per_year must be provided or inferrable when using integer lookbacks"
+                )
+            years = periods / per_year
+        else:
+            try:
+                delta = pd.to_timedelta(raw_lookback)
+            except (TypeError, ValueError) as exc:
+                raise ValueError(f"Invalid lookback '{label}': {raw_lookback!r}") from exc
+            if delta <= pd.Timedelta(0):
+                raise ValueError(f"Lookback '{label}' must be positive; received {raw_lookback!r}.")
+            if not isinstance(idx, pd.DatetimeIndex):
+                raise TypeError("Timedelta lookbacks require a DatetimeIndex.")
+            target = idx[-1] - delta
+            window = nav.loc[:target]
+            if window.empty:
+                continue
+            base = window.iloc[-1]
+            years = float(delta / year_td)
+
+        if years <= 0:
+            continue
+
+        growth = latest / base
+        valid = (base > 0) & (latest > 0) & growth.notna() & (growth > 0)
+        apy_series = pd.Series(float("nan"), index=assets)
+        if valid.any():
+            exponent = 1.0 / years
+            apy_series.loc[valid] = growth.loc[valid].pow(exponent) - 1.0
+        result[label] = apy_series
+
+    return result
+

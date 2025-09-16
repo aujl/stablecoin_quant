@@ -20,6 +20,7 @@ def cross_section_report(
     perf_fee_bps: float = 0.0,
     mgmt_fee_bps: float = 0.0,
     top_n: int = 20,
+    horizon_apys: pd.DataFrame | None = None,
 ) -> dict[str, Path]:
     """Generate file-first CSV outputs for the given snapshot repository.
 
@@ -30,13 +31,18 @@ def cross_section_report(
       - by_stablecoin.csv: aggregated by stablecoin symbol
       - topN.csv: top-N pools by base_apy
       - concentration.csv: HHI metrics across chain and stablecoin
-    Returns a dict of file label -> path for convenience.
+    When ``horizon_apys`` is provided the corresponding columns are merged into
+    the pool-level CSVs, enabling persistence of realised performance metrics
+    such as ``Realised APY (last 52 weeks)``. Returns a dict of file label ->
+    path for convenience.
     """
     out = _ensure_outdir(outdir)
     paths: dict[str, Path] = {}
 
     df = repo.to_dataframe()
     df = Metrics.add_net_apy_column(df, perf_fee_bps=perf_fee_bps, mgmt_fee_bps=mgmt_fee_bps)
+    if horizon_apys is not None and not horizon_apys.empty:
+        df = df.merge(horizon_apys, left_on="name", right_index=True, how="left")
     paths["pools"] = out / "pools.csv"
     df.to_csv(paths["pools"], index=False)
 
