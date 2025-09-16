@@ -25,3 +25,7 @@ charts = ["bar", "scatter", "chain"]
 top_n = 10
 perf_fee_bps = 0.0
 mgmt_fee_bps = 0.0
+
+[reporting.realised_apy_lookbacks]
+"last 2 weeks" = "14D"
+"last 52 weeks" = "52W"
