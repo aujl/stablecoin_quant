@@ -1,6 +1,10 @@
 # stablecoin_quant
 
+[![Coverage](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/aujl/stablecoin_quant/gh-pages/coverage/badge.json)](https://aujl.github.io/stablecoin_quant/coverage/)
+
 Experimental toolkit for analyzing and visualizing yields on stablecoin pools.
+
+Latest test coverage is published automatically from CI to [GitHub Pages](https://aujl.github.io/stablecoin_quant/coverage/), which hosts the HTML report alongside the badge metadata for the shield above.
 
 ## Project Layout
 
