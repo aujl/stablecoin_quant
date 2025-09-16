@@ -25,6 +25,8 @@ poetry run pytest -q
 ### Local Commands & Environment Variables
 
 - Run the demo: `poetry run python src/stable_yield_demo.py configs/demo.toml`
+- The demo can plot NAV and cumulative yield trajectories when
+  `initial_investment` and `yields_csv` are supplied via the config.
 - Override the demo config path with `STABLE_YIELD_CONFIG=/path/to/config.toml`
 - Export `CODEX_API_URL` and `CODEX_API_KEY` to experiment with Codex locally
 
