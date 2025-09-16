@@ -1,0 +1,32 @@
+{
+  "Aave USDT v3 (Polygon)": {
+    "history_start": "2023-07-16",
+    "history_end": "2024-07-07",
+    "observations": 52,
+    "realized_return_52w": 0.086133,
+    "realized_apy_52w": 0.086133,
+    "realized_volatility_52w": 0.011028,
+    "max_drawdown_52w": -0.009,
+    "last_period_return": 0.002433
+  },
+  "Curve 3Pool Convex (ETH)": {
+    "history_start": "2023-07-16",
+    "history_end": "2024-07-07",
+    "observations": 52,
+    "realized_return_52w": 0.059392,
+    "realized_apy_52w": 0.059392,
+    "realized_volatility_52w": 0.023207,
+    "max_drawdown_52w": -0.02287,
+    "last_period_return": 0.002438
+  },
+  "Morpho USDC (ETH)": {
+    "history_start": "2023-07-16",
+    "history_end": "2024-07-07",
+    "observations": 52,
+    "realized_return_52w": 0.117477,
+    "realized_apy_52w": 0.117477,
+    "realized_volatility_52w": 0.012712,
+    "max_drawdown_52w": -0.01,
+    "last_period_return": 0.003164
+  }
+}
