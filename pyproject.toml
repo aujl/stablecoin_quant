@@ -39,7 +39,7 @@ strict = true
 
 [tool.pytest.ini_options]
 minversion = "7.0"
-addopts = "-q --strict-markers"
+addopts = "-q --strict-markers --doctest-glob=README.md --doctest-glob=docs/*.md"
 testpaths = ["tests"]
 python_files = ["test_*.py"]
 filterwarnings = [

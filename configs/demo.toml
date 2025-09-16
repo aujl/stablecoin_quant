@@ -4,6 +4,10 @@ yields_csv = "src/sample_yields.csv"
 
 [csv]
 path = "src/sample_pools.csv"
+validation = "warn"
+expected_frequency = ""
+auto_refresh = false
+refresh_url = ""
 
 [filters]
 min_tvl = 100000
@@ -28,3 +32,7 @@ enabled = true
 rolling_windows = [4, 12]
 periods_per_year = 52
 target_field = "net_apy"
+
+[reporting.realised_apy_lookbacks]
+"last 2 weeks" = "14D"
+"last 52 weeks" = "52W"

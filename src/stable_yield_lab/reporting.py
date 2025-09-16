@@ -175,6 +175,7 @@ def cross_section_report(
     perf_fee_bps: float = 0.0,
     mgmt_fee_bps: float = 0.0,
     top_n: int = 20,
+    horizon_apys: pd.DataFrame | None = None,
     returns: pd.DataFrame | None = None,
     rolling_windows: Sequence[int] = (4, 12),
     periods_per_year: int = 52,
@@ -189,9 +190,17 @@ def cross_section_report(
       - by_stablecoin.csv: aggregated by stablecoin symbol
       - topN.csv: top-N pools by base_apy
       - concentration.csv: HHI metrics across chain and stablecoin
-      - rolling_apy.csv: rolling annualised yields derived from historical returns
+
+    When ``horizon_apys`` is provided the corresponding columns are merged into
+    the pool-level CSVs, enabling persistence of realised performance metrics
+    such as ``Realised APY (last 52 weeks)``.
+
+    When ``returns`` are supplied, additional historical analytics are
+    generated:
+      - rolling_apy.csv: annualised rolling yields derived from the returns
       - drawdowns.csv / drawdown_summary.csv: pathwise and summary drawdowns
-      - realised_vs_target.csv: realised APY vs configured target metric
+      - realised_vs_target.csv: realised APY versus the configured target
+
     Returns a dict of file label -> path for convenience.
     """
     out = _ensure_outdir(outdir)
@@ -199,6 +208,8 @@ def cross_section_report(
 
     df = repo.to_dataframe()
     df = Metrics.add_net_apy_column(df, perf_fee_bps=perf_fee_bps, mgmt_fee_bps=mgmt_fee_bps)
+    if horizon_apys is not None and not horizon_apys.empty:
+        df = df.merge(horizon_apys, left_on="name", right_index=True, how="left")
     paths["pools"] = out / "pools.csv"
     df.to_csv(paths["pools"], index=False)
 

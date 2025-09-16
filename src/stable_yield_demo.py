@@ -1,23 +1,38 @@
 from __future__ import annotations
 
+import logging
 import os
 import sys
 import tomllib
+import urllib.request
+import warnings
 from pathlib import Path
 from typing import Any, cast
 
 import pandas as pd
 
 from stable_yield_lab import (
-    CSVSource,
     HistoricalCSVSource,
     Metrics,
     Pipeline,
+    SchemaAwareCSVSource,
     Visualizer,
     performance,
     risk_metrics,
 )
 from stable_yield_lab.reporting import cross_section_report
+
+
+logger = logging.getLogger(__name__)
+
+def _normalise_lookbacks(raw: Any) -> dict[str, Any]:
+    """Coerce configuration lookback definitions into a labelled mapping."""
+
+    if isinstance(raw, dict):
+        return {str(k): v for k, v in raw.items()}
+    if isinstance(raw, list):
+        return {str(v): v for v in raw}
+    return {}
 
 
 def load_config(path: str | Path | None) -> dict[str, Any]:
@@ -36,7 +51,13 @@ def load_config(path: str | Path | None) -> dict[str, Any]:
     """
 
     default = {
-        "csv": {"path": str(Path(__file__).with_name("sample_pools.csv"))},
+        "csv": {
+            "path": str(Path(__file__).with_name("sample_pools.csv")),
+            "validation": "warn",
+            "expected_frequency": None,
+            "auto_refresh": False,
+            "refresh_url": None,
+        },
         "yields_csv": str(Path(__file__).with_name("sample_yields.csv")),
         "initial_investment": 1_000.0,
         "filters": {
@@ -50,7 +71,7 @@ def load_config(path: str | Path | None) -> dict[str, Any]:
             "outdir": None,
             "show": True,
             "charts": ["bar", "scatter", "chain"],
-            "history_charts": ["rolling_apy", "drawdowns"],
+            "history_charts": ["rolling_apy", "drawdowns", "realised_vs_target"],
         },
         "reporting": {
             "top_n": 10,
@@ -62,6 +83,7 @@ def load_config(path: str | Path | None) -> dict[str, Any]:
                 "periods_per_year": 52,
                 "target_field": "net_apy",
             },
+            "realised_apy_lookbacks": {"last 2 weeks": "14D", "last 52 weeks": "52W"},
         },
     }
 
@@ -108,10 +130,48 @@ def main() -> None:
         except ValueError:
             pass
 
+    lookbacks_cfg = _normalise_lookbacks(cfg.get("reporting", {}).get("realised_apy_lookbacks", {}))
+    realised_apys: pd.DataFrame | None = None
+    nav_ts: pd.DataFrame | None = None
+    yield_ts_pct: pd.DataFrame | None = None
+
     # Load data
-    csv_path = cfg["csv"]["path"]
-    src = CSVSource(path=csv_path)
+    csv_cfg = cfg.get("csv", {})
+    csv_path = str(csv_cfg.get("path", cfg["csv"]["path"]))
+    validation_level = str(csv_cfg.get("validation", "warn"))
+    expected_frequency = csv_cfg.get("expected_frequency")
+    if expected_frequency:
+        expected_frequency = str(expected_frequency)
+    else:
+        expected_frequency = None
+    frequency_column = str(csv_cfg.get("frequency_column", "timestamp"))
+    auto_refresh = bool(csv_cfg.get("auto_refresh", False))
+    refresh_url = csv_cfg.get("refresh_url") or None
+
+    refresh_callback = None
+    if refresh_url:
+        url = str(refresh_url)
+
+        def refresh_callback(target: Path, *, _url: str = url) -> None:
+            with urllib.request.urlopen(_url) as response:
+                target.write_bytes(response.read())
+
+    elif auto_refresh:
+        logger.warning("Auto refresh requested but no refresh_url provided; skipping refresh.")
+        auto_refresh = False
+
+    src = SchemaAwareCSVSource(
+        path=csv_path,
+        validation=validation_level,
+        expected_frequency=expected_frequency,
+        frequency_column=frequency_column,
+        auto_refresh=auto_refresh,
+        refresh_callback=refresh_callback,
+    )
     repo = Pipeline([src]).run()
+
+    if src.detected_frequency:
+        print(f"Detected CSV frequency: {src.detected_frequency}")
 
     # Apply filters
     f = cfg.get("filters", {})
@@ -141,37 +201,93 @@ def main() -> None:
 
     history_cfg = reporting_cfg.get("history", {})
     history_enabled = bool(history_cfg.get("enabled", False))
-    rolling_windows_cfg = history_cfg.get("rolling_windows", [])
-    rolling_windows = tuple(int(w) for w in rolling_windows_cfg) if rolling_windows_cfg else (4, 12)
+    rolling_windows_cfg = history_cfg.get("rolling_windows") or ()
+    rolling_windows = tuple(int(w) for w in rolling_windows_cfg if int(w) > 0)
+    if not rolling_windows:
+        rolling_windows = (4, 12)
     periods_per_year = int(history_cfg.get("periods_per_year", 52))
     target_field = str(history_cfg.get("target_field", "net_apy"))
 
-    # Load historical returns once for reuse
     returns_ts = pd.DataFrame()
-    if history_enabled and cfg.get("yields_csv"):
-        hist_src = HistoricalCSVSource(str(cfg["yields_csv"]))
-        returns_ts = Pipeline([hist_src]).run_history()
+    pool_names = {pool.name for pool in filtered}
+    history_path = cfg.get("yields_csv")
+    historical_returns = pd.DataFrame()
+    if history_path:
+        hist_src = HistoricalCSVSource(str(history_path))
+        historical_returns = Pipeline([hist_src]).run_history()
+        if historical_returns.empty:
+            warnings.warn(
+                f"Historical returns from {history_path} produced no rows; skipping risk metrics.",
+                stacklevel=2,
+            )
+    else:
+        warnings.warn("No historical returns configured; skipping risk metrics.", stacklevel=2)
 
-    # Risk metrics derived from time-series returns (base APY as placeholder)
-    returns = df.pivot_table(index="timestamp", columns="name", values="base_apy")
+    returns_for_metrics = pd.DataFrame()
+    if pool_names and not historical_returns.empty:
+        matched_cols = [col for col in historical_returns.columns if col in pool_names]
+        if matched_cols:
+            matched_returns = historical_returns.loc[:, matched_cols]
+            matched_returns = matched_returns.dropna(axis=1, how="all").dropna(how="all")
+            if matched_returns.empty or matched_returns.columns.empty:
+                warnings.warn(
+                    "Historical returns contain only missing values after filtering; skipping risk metrics.",
+                    stacklevel=2,
+                )
+            else:
+                returns_for_metrics = matched_returns
+        else:
+            warnings.warn(
+                "No historical returns matched the filtered pools; skipping risk metrics.",
+                stacklevel=2,
+            )
+    elif not pool_names:
+        warnings.warn("No pools available after filtering; skipping risk metrics.", stacklevel=2)
+
     stats = frontier = None
-    try:
-        stats = risk_metrics.summary_statistics(returns)
-        frontier = risk_metrics.efficient_frontier(returns)
-    except Exception as exc:
-        print(f"Skipping risk metrics: {exc}")
+    if not returns_for_metrics.empty:
+        try:
+            stats = risk_metrics.summary_statistics(returns_for_metrics)
+            frontier = risk_metrics.efficient_frontier(returns_for_metrics)
+        except Exception as exc:
+            print(f"Skipping risk metrics: {exc}")
+
+    if not historical_returns.empty:
+        returns_ts = historical_returns
+        initial = float(cfg.get("initial_investment", 1.0))
+        nav_ts = performance.nav_trajectories(returns_ts, initial_investment=initial)
+        yield_ts_pct = performance.yield_trajectories(returns_ts) * 100.0
+        if lookbacks_cfg:
+            apy_table = performance.horizon_apys(nav_ts, lookbacks=lookbacks_cfg, value_type="nav")
+            if not apy_table.empty:
+                apy_table = apy_table.rename(
+                    columns={label: f"Realised APY ({label})" for label in apy_table.columns}
+                )
+                realised_apys = apy_table
+                if not df.empty:
+                    df = df.merge(apy_table, left_on="name", right_index=True, how="left")
+                pretty = apy_table.mul(100.0).round(2)
+                print("Realised APY horizons (annualised, %):")
+                print(pretty.to_string())
+    elif lookbacks_cfg:
+        warnings.warn(
+            "Realised APY lookbacks configured but no historical returns available.",
+            stacklevel=2,
+        )
 
     report_paths: dict[str, Path] = {}
 
     if outdir:
         outdir.mkdir(parents=True, exist_ok=True)
+        history_returns = returns_ts if history_enabled and not returns_ts.empty else None
         report_paths = cross_section_report(
             filtered,
             outdir,
             perf_fee_bps=float(cfg.get("reporting", {}).get("perf_fee_bps", 0.0)),
             mgmt_fee_bps=float(cfg.get("reporting", {}).get("mgmt_fee_bps", 0.0)),
             top_n=top_n,
-            returns=returns_ts if history_enabled and not returns_ts.empty else None,
+            horizon_apys=realised_apys,
+            returns=history_returns,
             rolling_windows=rolling_windows,
             periods_per_year=periods_per_year,
             target_field=target_field,
@@ -204,25 +320,29 @@ def main() -> None:
             show=show,
         )
 
-    # Performance trajectories from historical yields
     if history_enabled and not returns_ts.empty:
-        initial = float(cfg.get("initial_investment", 1.0))
-        nav_ts = performance.nav_trajectories(returns_ts, initial_investment=initial)
-        yield_ts = performance.yield_trajectories(returns_ts) * 100.0
-        Visualizer.line_chart(
-            yield_ts,
-            title="Yield over time",
-            ylabel="Yield (%)",
-            save_path=str(outdir / "yield_vs_time.png") if outdir else None,
-            show=show,
-        )
-        Visualizer.line_chart(
-            nav_ts,
-            title="NAV over time",
-            ylabel="NAV (USD)",
-            save_path=str(outdir / "nav_vs_time.png") if outdir else None,
-            show=show,
-        )
+        if yield_ts_pct is None or yield_ts_pct.empty:
+            yield_ts_pct = performance.yield_trajectories(returns_ts) * 100.0
+        if nav_ts is None or nav_ts.empty:
+            initial = float(cfg.get("initial_investment", 1.0))
+            nav_ts = performance.nav_trajectories(returns_ts, initial_investment=initial)
+
+        if yield_ts_pct is not None and not yield_ts_pct.empty:
+            Visualizer.line_chart(
+                yield_ts_pct,
+                title="Yield over time",
+                ylabel="Yield (%)",
+                save_path=str(outdir / "yield_vs_time.png") if outdir else None,
+                show=show,
+            )
+        if nav_ts is not None and not nav_ts.empty:
+            Visualizer.line_chart(
+                nav_ts,
+                title="NAV over time",
+                ylabel="NAV (USD)",
+                save_path=str(outdir / "nav_vs_time.png") if outdir else None,
+                show=show,
+            )
 
         if outdir and history_charts:
             if "rolling_apy" in history_charts and "rolling_apy" in report_paths:
@@ -250,7 +370,7 @@ def main() -> None:
                         pivot * 100.0,
                         title="Drawdown trajectories",
                         ylabel="Drawdown (%)",
-                        save_path=str(outdir / "drawdowns.png"),
+                        save_path=str(outdir / "drawdowns.png") if outdir else None,
                         show=show,
                     )
             if "realised_vs_target" in history_charts and "realised_vs_target" in report_paths:

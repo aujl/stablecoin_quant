@@ -10,7 +10,10 @@ from stable_yield_lab.reporting import cross_section_report
 
 
 @pytest.mark.parametrize("with_returns", [False, True])
-def test_cross_section_report_history_outputs(tmp_path: Path, with_returns: bool) -> None:
+@pytest.mark.parametrize("with_horizon", [False, True])
+def test_cross_section_report_history_outputs(
+    tmp_path: Path, with_returns: bool, with_horizon: bool
+) -> None:
     repo = PoolRepository(
         [
             Pool(
@@ -40,11 +43,11 @@ def test_cross_section_report_history_outputs(tmp_path: Path, with_returns: bool
         index=pd.to_datetime(["2024-01-01", "2024-01-08", "2024-01-15"], utc=True),
     )
 
-    history_kwargs = {
-        "returns": returns if with_returns else None,
-        "rolling_windows": (2,),
-        "periods_per_year": 2,
-    }
+    horizon = None
+    if with_horizon:
+        horizon = pd.DataFrame(
+            {"Realised APY (custom)": [0.05, 0.04]}, index=["PoolA", "PoolB"]
+        )
 
     paths = cross_section_report(
         repo,
@@ -52,11 +55,20 @@ def test_cross_section_report_history_outputs(tmp_path: Path, with_returns: bool
         perf_fee_bps=0.0,
         mgmt_fee_bps=0.0,
         top_n=2,
-        **history_kwargs,
+        horizon_apys=horizon,
+        returns=returns if with_returns else None,
+        rolling_windows=(2,),
+        periods_per_year=2,
     )
 
     base_keys = {"pools", "by_chain", "by_source", "by_stablecoin", "topN", "concentration"}
     assert base_keys.issubset(paths)
+
+    pools_df = pd.read_csv(paths["pools"])
+    if with_horizon:
+        assert "Realised APY (custom)" in pools_df.columns
+    else:
+        assert "Realised APY (custom)" not in pools_df.columns
 
     if not with_returns:
         assert {"rolling_apy", "drawdowns", "drawdown_summary", "realised_vs_target"}.isdisjoint(paths)
