@@ -8,7 +8,36 @@ compounding identity :math:`G_t = \prod_{i=1}^t (1 + r_i)`.
 
 from __future__ import annotations
 
+from dataclasses import asdict, dataclass
+
 import pandas as pd
+
+
+@dataclass(frozen=True)
+class HorizonAPYDiagnostics:
+    r"""Annualised APY diagnostics for a single pool over a discrete horizon.
+
+    Attributes
+    ----------
+    pool:
+        Pool identifier (column name from the returns DataFrame).
+    apy:
+        Annualised percentage yield over the evaluated horizon expressed as a
+        decimal fraction.
+    periods:
+        Number of observed (non-missing) return periods within the horizon.
+    missing_pct:
+        Fraction of missing observations relative to the horizon length
+        (``0`` means fully observed, ``1`` means all periods missing).
+    volatility:
+        Standard deviation of observed period returns (decimal fraction).
+    """
+
+    pool: str
+    apy: float
+    periods: int
+    missing_pct: float
+    volatility: float
 
 
 def cumulative_return(series: pd.Series) -> pd.Series:
@@ -158,3 +187,93 @@ def yield_trajectories(returns: pd.DataFrame) -> pd.DataFrame:
     if returns.empty:
         return returns.copy()
     return (1.0 + returns.fillna(0.0)).cumprod() - 1.0
+
+
+def horizon_apy_diagnostics(
+    returns: pd.DataFrame,
+    *,
+    periods_per_year: int,
+    horizon: int | None = None,
+) -> pd.DataFrame:
+    r"""Summarise annualised APY and data coverage diagnostics per pool.
+
+    Parameters
+    ----------
+    returns:
+        Wide DataFrame of periodic simple returns (rows are timestamps, columns
+        are pools) expressed as decimal fractions.
+    periods_per_year:
+        Number of compounding periods in a year (e.g. ``52`` for weekly
+        returns). Must be positive.
+    horizon:
+        Optional look-back window expressed as a number of periods. When
+        provided, only the most recent ``horizon`` rows are considered.
+
+    Returns
+    -------
+    pandas.DataFrame
+        DataFrame indexed by pool name with columns ``["apy", "periods",
+        "missing_pct", "volatility"]``. ``apy`` is the annualised yield over
+        the selected horizon, ``periods`` counts observed (non-missing)
+        returns, ``missing_pct`` measures the share of missing observations,
+        and ``volatility`` records the standard deviation of observed returns.
+        Missing returns are treated as ``0`` during compounding to preserve the
+        horizon length; the ``missing_pct`` column surfaces the resulting data
+        gaps.
+
+    Raises
+    ------
+    ValueError
+        If ``periods_per_year`` or ``horizon`` (when provided) are not
+        positive.
+    """
+
+    if periods_per_year <= 0:
+        raise ValueError("periods_per_year must be positive")
+    if returns.empty:
+        return pd.DataFrame(columns=["apy", "periods", "missing_pct", "volatility"], dtype=float)
+
+    if horizon is not None:
+        if horizon <= 0:
+            raise ValueError("horizon must be positive")
+        window = returns.tail(horizon)
+    else:
+        window = returns
+
+    diagnostics: list[HorizonAPYDiagnostics] = []
+    for pool, series in window.items():
+        total_periods = len(series)
+        if total_periods == 0:
+            continue
+
+        observed = series.dropna()
+        periods = int(observed.size)
+        missing_pct = float((total_periods - periods) / total_periods)
+        volatility = float(observed.std(ddof=0)) if periods > 0 else float("nan")
+
+        if periods == 0:
+            apy = float("nan")
+        else:
+            filled = series.fillna(0.0)
+            growth = float((1.0 + filled).prod())
+            if growth < 0.0:
+                apy = float("nan")
+            else:
+                exponent = periods_per_year / total_periods
+                apy = float(growth ** exponent - 1.0)
+
+        diagnostics.append(
+            HorizonAPYDiagnostics(
+                pool=pool,
+                apy=apy,
+                periods=periods,
+                missing_pct=missing_pct,
+                volatility=volatility,
+            )
+        )
+
+    if not diagnostics:
+        return pd.DataFrame(columns=["apy", "periods", "missing_pct", "volatility"], dtype=float)
+
+    df = pd.DataFrame([asdict(d) for d in diagnostics]).set_index("pool")
+    return df[["apy", "periods", "missing_pct", "volatility"]]

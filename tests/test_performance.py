@@ -89,3 +89,55 @@ def test_nav_series_defaults_and_empty() -> None:
     expected_returns = returns.mul(0.5, axis=1).sum(axis=1)
     expected_nav = (1.0 + expected_returns).cumprod()
     pd.testing.assert_series_equal(result, expected_nav)
+
+
+def test_horizon_apy_diagnostics_reports_missing_and_negative_returns() -> None:
+    dates = pd.date_range("2024-01-01", periods=4, freq="W")
+    returns = pd.DataFrame(
+        {
+            "Growth": [0.01, 0.02, None, 0.015],
+            "Gap": [0.008, None, 0.007, None],
+            "Drawdown": [-0.05, -0.02, None, None],
+        },
+        index=dates,
+    )
+
+    diagnostics = performance.horizon_apy_diagnostics(returns, periods_per_year=52)
+
+    assert list(diagnostics.columns) == ["apy", "periods", "missing_pct", "volatility"]
+
+    growth_filled = pd.Series([0.01, 0.02, 0.0, 0.015])
+    expected_growth = float((1.0 + growth_filled).prod())
+    expected_growth_apy = expected_growth ** (52 / len(growth_filled)) - 1.0
+    assert diagnostics.loc["Growth", "apy"] == pytest.approx(expected_growth_apy)
+    assert diagnostics.loc["Growth", "periods"] == 3
+    assert diagnostics.loc["Growth", "missing_pct"] == pytest.approx(0.25)
+    expected_growth_vol = pd.Series([0.01, 0.02, 0.015]).std(ddof=0)
+    assert diagnostics.loc["Growth", "volatility"] == pytest.approx(expected_growth_vol)
+
+    drawdown_filled = pd.Series([-0.05, -0.02, 0.0, 0.0])
+    drawdown_growth = float((1.0 + drawdown_filled).prod())
+    expected_drawdown_apy = drawdown_growth ** (52 / len(drawdown_filled)) - 1.0
+    assert diagnostics.loc["Drawdown", "apy"] == pytest.approx(expected_drawdown_apy)
+    assert diagnostics.loc["Drawdown", "apy"] < 0
+    assert diagnostics.loc["Drawdown", "periods"] == 2
+    assert diagnostics.loc["Drawdown", "missing_pct"] == pytest.approx(0.5)
+    expected_drawdown_vol = pd.Series([-0.05, -0.02]).std(ddof=0)
+    assert diagnostics.loc["Drawdown", "volatility"] == pytest.approx(expected_drawdown_vol)
+
+    assert diagnostics.loc["Gap", "missing_pct"] == pytest.approx(0.5)
+
+
+def test_horizon_apy_diagnostics_respects_window_and_validates_input() -> None:
+    dates = pd.date_range("2024-01-01", periods=4, freq="W")
+    returns = pd.DataFrame({"Growth": [0.01, 0.02, None, 0.015]}, index=dates)
+
+    short_window = performance.horizon_apy_diagnostics(returns, periods_per_year=52, horizon=2)
+    assert short_window.loc["Growth", "periods"] == 1
+    assert short_window.loc["Growth", "missing_pct"] == pytest.approx(0.5)
+    filled = pd.Series([0.0, 0.015])
+    expected_apy = float((1.0 + filled).prod()) ** (52 / len(filled)) - 1.0
+    assert short_window.loc["Growth", "apy"] == pytest.approx(expected_apy)
+
+    with pytest.raises(ValueError):
+        performance.horizon_apy_diagnostics(returns, periods_per_year=52, horizon=0)
