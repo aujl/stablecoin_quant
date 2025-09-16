@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 
 import pandas as pd
@@ -19,6 +20,10 @@ def cross_section_report(
     *,
     perf_fee_bps: float = 0.0,
     mgmt_fee_bps: float = 0.0,
+    perf_fee_schedule: Sequence[tuple[float, float] | Mapping[str, float]] | None = None,
+    mgmt_fee_schedule: Sequence[tuple[float, float] | Mapping[str, float]] | None = None,
+    realized_returns: Mapping[str, Sequence[float] | pd.Series] | pd.DataFrame | None = None,
+    periods_per_year: int | None = None,
     top_n: int = 20,
 ) -> dict[str, Path]:
     """Generate file-first CSV outputs for the given snapshot repository.
@@ -36,7 +41,15 @@ def cross_section_report(
     paths: dict[str, Path] = {}
 
     df = repo.to_dataframe()
-    df = Metrics.add_net_apy_column(df, perf_fee_bps=perf_fee_bps, mgmt_fee_bps=mgmt_fee_bps)
+    df = Metrics.add_net_apy_column(
+        df,
+        perf_fee_bps=perf_fee_bps,
+        mgmt_fee_bps=mgmt_fee_bps,
+        perf_fee_schedule=perf_fee_schedule,
+        mgmt_fee_schedule=mgmt_fee_schedule,
+        realized_returns=realized_returns,
+        periods_per_year=periods_per_year,
+    )
     paths["pools"] = out / "pools.csv"
     df.to_csv(paths["pools"], index=False)
 

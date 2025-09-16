@@ -11,13 +11,14 @@ Design goals:
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Iterator
+from collections.abc import Iterable, Iterator, Mapping, Sequence
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Protocol
 import json
 import logging
+import math
 import urllib.request
 import pandas as pd
 
@@ -462,20 +463,140 @@ class Metrics:
         return df.sort_values(key, ascending=False).head(n)
 
     @staticmethod
+    def _coerce_returns(returns: Iterable[float] | pd.Series | None) -> list[float]:
+        if returns is None:
+            return []
+        if isinstance(returns, pd.Series):
+            iterable = returns.dropna().tolist()
+        else:
+            iterable = list(returns)
+        coerced: list[float] = []
+        for item in iterable:
+            try:
+                val = float(item)
+            except (TypeError, ValueError):
+                continue
+            if math.isnan(val):
+                continue
+            coerced.append(val)
+        return coerced
+
+    @staticmethod
+    def _resolve_fee_rate(
+        gross_return: float,
+        base_bps: float | None,
+        schedule: Sequence[tuple[float, float] | Mapping[str, float]] | None,
+    ) -> float:
+        rate_bps = base_bps if base_bps is not None else 0.0
+        if schedule:
+            tiers: list[tuple[float, float]] = []
+            for tier in schedule:
+                if isinstance(tier, Mapping):
+                    if "bps" not in tier:
+                        continue
+                    threshold = float(tier.get("threshold", math.inf))
+                    bps = float(tier["bps"])
+                else:
+                    if len(tier) < 2:
+                        continue
+                    threshold, bps = tier[0], tier[1]
+                    threshold = float(threshold)
+                    bps = float(bps)
+                tiers.append((threshold, bps))
+            if tiers:
+                tiers.sort(key=lambda x: x[0])
+                rate_bps = tiers[-1][1]
+                for threshold, bps in tiers:
+                    if gross_return <= threshold:
+                        rate_bps = bps
+                        break
+        rate = float(rate_bps) / 10_000.0
+        return max(rate, 0.0)
+
+    @staticmethod
     def net_apy(
         base_apy: float,
         reward_apy: float = 0.0,
         *,
         perf_fee_bps: float = 0.0,
         mgmt_fee_bps: float = 0.0,
+        perf_fee_schedule: Sequence[tuple[float, float] | Mapping[str, float]] | None = None,
+        mgmt_fee_schedule: Sequence[tuple[float, float] | Mapping[str, float]] | None = None,
+        realized_returns: Iterable[float] | pd.Series | None = None,
+        periods_per_year: int | None = None,
     ) -> float:
-        """Compute net APY after performance/management fees.
+        """Compute net APY after fees, optionally using realised return data.
 
-        Fees are specified in basis points (1% = 100 bps).
+        Parameters
+        ----------
+        base_apy, reward_apy:
+            Annualised gross yields expressed as decimal fractions. These inputs
+            are used when ``realized_returns`` is not supplied.
+        perf_fee_bps, mgmt_fee_bps:
+            Flat performance and management fees in basis points (1% = 100 bps).
+            Each can be overridden by providing a tiered fee schedule.
+        perf_fee_schedule, mgmt_fee_schedule:
+            Optional tier definitions expressed as sequences of
+            ``(threshold, bps)`` pairs or mappings with ``"threshold"`` and
+            ``"bps"`` keys. Thresholds are compared against the gross annual
+            return (decimal form). The first tier with
+            ``gross_return <= threshold`` is applied; the final tier acts as the
+            default catch-all.
+        realized_returns:
+            Periodic realised returns in decimal form. When provided, the helper
+            compounds these observations to derive the gross annual return before
+            fees.
+        periods_per_year:
+            Number of compounding periods per calendar year. Defaults to ``1``
+            when annualised inputs are used and to ``len(realized_returns)`` when
+            working from realised returns.
         """
-        gross = float(base_apy) + float(reward_apy)
-        fee_frac = (perf_fee_bps + mgmt_fee_bps) / 10_000.0
-        return max(gross * (1.0 - fee_frac), -1.0)
+
+        returns_list = Metrics._coerce_returns(realized_returns)
+        if returns_list:
+            period_count = len(returns_list)
+            freq = periods_per_year or period_count
+            freq = max(int(freq), 1)
+            gross_growth = math.prod(1.0 + r for r in returns_list)
+            if gross_growth <= 0:
+                return -1.0
+            gross_apy = gross_growth ** (freq / period_count) - 1.0
+            period_returns = returns_list
+        else:
+            gross_apy = float(base_apy or 0.0) + float(reward_apy or 0.0)
+            if gross_apy <= -1.0:
+                return -1.0
+            freq = periods_per_year or 1
+            freq = max(int(freq), 1)
+            base_growth = 1.0 + gross_apy
+            period_return = base_growth ** (1.0 / freq) - 1.0
+            period_returns = [period_return] * freq
+            period_count = freq
+            gross_growth = base_growth
+
+        mgmt_rate = Metrics._resolve_fee_rate(gross_apy, mgmt_fee_bps, mgmt_fee_schedule)
+        perf_rate = Metrics._resolve_fee_rate(gross_apy, perf_fee_bps, perf_fee_schedule)
+
+        net_returns: list[float] = []
+        for r in period_returns:
+            net = float(r)
+            if mgmt_rate:
+                net -= abs(net) * mgmt_rate
+            perf_base = net if net > 0 else 0.0
+            if perf_rate and perf_base > 0:
+                net -= perf_base * perf_rate
+            net = max(net, -0.9999999999)
+            net_returns.append(net)
+
+        effective_freq = periods_per_year or (len(returns_list) if returns_list else len(net_returns))
+        effective_freq = max(int(effective_freq), 1)
+        period_count = len(net_returns)
+        net_growth = math.prod(1.0 + r for r in net_returns)
+        if net_growth <= 0:
+            return -1.0
+        annual_growth = net_growth ** (effective_freq / period_count) if period_count else 1.0
+        net_apy = annual_growth - 1.0
+        return max(net_apy, -1.0)
 
     @staticmethod
     def add_net_apy_column(
@@ -483,17 +604,42 @@ class Metrics:
         *,
         perf_fee_bps: float = 0.0,
         mgmt_fee_bps: float = 0.0,
+        perf_fee_schedule: Sequence[tuple[float, float] | Mapping[str, float]] | None = None,
+        mgmt_fee_schedule: Sequence[tuple[float, float] | Mapping[str, float]] | None = None,
+        realized_returns: Mapping[str, Iterable[float] | pd.Series] | pd.DataFrame | None = None,
+        periods_per_year: int | None = None,
         out_col: str = "net_apy",
     ) -> pd.DataFrame:
         if df.empty:
             return df
         out = df.copy()
+        returns_lookup: Mapping[str, Iterable[float] | pd.Series] | None
+        if realized_returns is None:
+            returns_lookup = None
+        elif isinstance(realized_returns, pd.DataFrame):
+            returns_lookup = {
+                str(col): realized_returns[col].dropna() for col in realized_returns.columns
+            }
+        elif isinstance(realized_returns, Mapping):
+            returns_lookup = realized_returns
+        else:
+            raise TypeError("realized_returns must be a mapping or DataFrame when provided")
+
+        def _returns_for(name: Any) -> Iterable[float] | pd.Series | None:
+            if returns_lookup is None:
+                return None
+            return returns_lookup.get(str(name), None)
+
         out[out_col] = [
             Metrics.net_apy(
                 row.get("base_apy", 0.0),
                 row.get("reward_apy", 0.0),
                 perf_fee_bps=perf_fee_bps,
                 mgmt_fee_bps=mgmt_fee_bps,
+                perf_fee_schedule=perf_fee_schedule,
+                mgmt_fee_schedule=mgmt_fee_schedule,
+                realized_returns=_returns_for(row.get("name")),
+                periods_per_year=periods_per_year,
             )
             for _, row in out.iterrows()
         ]

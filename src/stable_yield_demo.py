@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import os
 import sys
 import tomllib
@@ -45,7 +46,14 @@ def load_config(path: str | Path | None) -> dict[str, Any]:
             # "stablecoins": ["USDC"]
         },
         "output": {"outdir": None, "show": True, "charts": ["bar", "scatter", "chain"]},
-        "reporting": {"top_n": 10, "perf_fee_bps": 0.0, "mgmt_fee_bps": 0.0},
+        "reporting": {
+            "top_n": 10,
+            "perf_fee_bps": 0.0,
+            "mgmt_fee_bps": 0.0,
+            "perf_fee_schedule": [],
+            "mgmt_fee_schedule": [],
+            "net_periods_per_year": None,
+        },
     }
 
     cfg_path = Path(path) if path else None
@@ -91,6 +99,47 @@ def main() -> None:
         except ValueError:
             pass
 
+    rep_cfg = cfg.get("reporting", {})
+
+    def _parse_schedule(raw: Any) -> list[tuple[float, float]] | None:
+        if not raw:
+            return None
+        schedule: list[tuple[float, float]] = []
+        for tier in raw:
+            if isinstance(tier, dict):
+                if "bps" not in tier:
+                    continue
+                threshold_raw = tier.get("threshold", math.inf)
+                bps_raw = tier.get("bps")
+            elif isinstance(tier, (list, tuple)) and len(tier) >= 2:
+                threshold_raw, bps_raw = tier[0], tier[1]
+            else:
+                continue
+            try:
+                threshold = float(threshold_raw)
+            except (TypeError, ValueError):
+                threshold = math.inf
+            try:
+                bps = float(bps_raw)
+            except (TypeError, ValueError):
+                continue
+            schedule.append((threshold, bps))
+        schedule.sort(key=lambda x: x[0])
+        return schedule or None
+
+    perf_fee_schedule = _parse_schedule(rep_cfg.get("perf_fee_schedule"))
+    mgmt_fee_schedule = _parse_schedule(rep_cfg.get("mgmt_fee_schedule"))
+    perf_fee_bps = float(rep_cfg.get("perf_fee_bps", 0.0))
+    mgmt_fee_bps = float(rep_cfg.get("mgmt_fee_bps", 0.0))
+    top_n = int(rep_cfg.get("top_n", 10))
+    periods_per_year = rep_cfg.get("net_periods_per_year")
+    try:
+        periods_per_year = int(periods_per_year)
+        if periods_per_year <= 0:
+            periods_per_year = None
+    except (TypeError, ValueError):
+        periods_per_year = None
+
     # Load data
     csv_path = cfg["csv"]["path"]
     src = CSVSource(path=csv_path)
@@ -111,7 +160,6 @@ def main() -> None:
 
     # Summaries
     by_chain = Metrics.groupby_chain(filtered)
-    top_n = int(cfg.get("reporting", {}).get("top_n", 10))
     Metrics.top_n(filtered, n=top_n, key="base_apy")
 
     # Outputs
@@ -129,13 +177,22 @@ def main() -> None:
     except Exception as exc:
         print(f"Skipping risk metrics: {exc}")
 
+    returns_ts = None
+    if cfg.get("yields_csv"):
+        hist_src = HistoricalCSVSource(str(cfg["yields_csv"]))
+        returns_ts = Pipeline([hist_src]).run_history()
+
     if outdir:
         outdir.mkdir(parents=True, exist_ok=True)
         cross_section_report(
             filtered,
             outdir,
-            perf_fee_bps=float(cfg.get("reporting", {}).get("perf_fee_bps", 0.0)),
-            mgmt_fee_bps=float(cfg.get("reporting", {}).get("mgmt_fee_bps", 0.0)),
+            perf_fee_bps=perf_fee_bps,
+            mgmt_fee_bps=mgmt_fee_bps,
+            perf_fee_schedule=perf_fee_schedule,
+            mgmt_fee_schedule=mgmt_fee_schedule,
+            realized_returns=returns_ts if returns_ts is not None and not returns_ts.empty else None,
+            periods_per_year=periods_per_year,
             top_n=top_n,
         )
         if stats is not None:
@@ -167,9 +224,7 @@ def main() -> None:
         )
 
     # Performance trajectories from historical yields
-    if cfg.get("yields_csv"):
-        hist_src = HistoricalCSVSource(str(cfg["yields_csv"]))
-        returns_ts = Pipeline([hist_src]).run_history()
+    if returns_ts is not None and not returns_ts.empty:
         initial = float(cfg.get("initial_investment", 1.0))
         nav_ts = performance.nav_trajectories(returns_ts, initial_investment=initial)
         yield_ts = performance.yield_trajectories(returns_ts) * 100.0

@@ -1,9 +1,40 @@
+import math
+
+import pytest
+
 from stable_yield_lab import Metrics, Pool, PoolRepository
 
 
-def test_net_apy() -> None:
+def test_net_apy_flat_fee() -> None:
     val = Metrics.net_apy(0.10, 0.02, perf_fee_bps=200, mgmt_fee_bps=100)
-    assert abs(val - (0.12 * 0.97)) < 1e-12
+    assert val == pytest.approx(0.12 * (1 - 0.01) * (1 - 0.02), rel=1e-12)
+
+
+def test_net_apy_compounds_realised_returns() -> None:
+    realised = [0.01, 0.02, -0.005]
+    val = Metrics.net_apy(0.0, realized_returns=realised)
+    expected = math.prod(1 + r for r in realised) - 1
+    assert val == pytest.approx(expected, rel=1e-12)
+
+
+def test_net_apy_tiered_fee_schedule() -> None:
+    perf_schedule = [(0.05, 100), (0.10, 150), (float("inf"), 200)]
+    mgmt_schedule = [(0.05, 25), (float("inf"), 100)]
+    val = Metrics.net_apy(
+        0.10,
+        0.02,
+        perf_fee_schedule=perf_schedule,
+        mgmt_fee_schedule=mgmt_schedule,
+    )
+    expected = 0.12 * (1 - 0.01) * (1 - 0.02)
+    assert val == pytest.approx(expected, rel=1e-12)
+
+
+def test_net_apy_handles_negative_periods() -> None:
+    realised = [-0.10, 0.05]
+    val = Metrics.net_apy(0.0, realized_returns=realised)
+    expected = math.prod(1 + r for r in realised) - 1
+    assert val == pytest.approx(expected, rel=1e-12)
 
 
 def test_hhi_basic() -> None:
