@@ -15,10 +15,12 @@ from collections.abc import Iterable, Iterator
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from pathlib import Path
+from statistics import NormalDist
 from typing import Any, Protocol
 import json
 import logging
 import urllib.request
+import numpy as np
 import pandas as pd
 
 from . import performance, risk_scoring
@@ -763,6 +765,128 @@ class Visualizer:
         plt.xlabel("Date")
         plt.ylabel(ylabel)
         plt.title(title)
+        plt.tight_layout()
+        if save_path:
+            plt.savefig(save_path, bbox_inches="tight")
+        if show:
+            plt.show()
+
+    @staticmethod
+    def rolling_apy(
+        returns: pd.DataFrame,
+        window: str | pd.Timedelta = "365D",
+        *,
+        confidence: float = 0.95,
+        save_path: str | None = None,
+        show: bool = True,
+        periods_per_year: float | None = None,
+        min_periods: int | None = None,
+    ) -> None:
+        r"""Plot rolling one-year APYs with volatility-based confidence bands.
+
+        The method interprets ``returns`` as periodic simple returns expressed as
+        decimal fractions (``0.01`` equals +1%).  For each rolling window it
+        annualises the log-return statistics
+
+        .. math::
+            \mu_t = \frac{1}{n_t} \sum_{i \in t} \log(1 + r_i), \qquad
+            \sigma_t = \operatorname{stdev}\bigl(\log(1 + r_i)\bigr),
+
+        and converts them to APY equivalents via
+
+        .. math::
+            \text{APY}_t = \exp\bigl(P \mu_t\bigr) - 1,
+
+        where :math:`P` is the number of observations per year.  The shaded
+        interval represents a Gaussian :math:`(1-\alpha)` confidence band using
+        :math:`\mu_t \pm z_{1-\alpha/2} \sigma_t \sqrt{P}`.
+
+        Parameters
+        ----------
+        returns:
+            Wide DataFrame of periodic returns indexed by ``DatetimeIndex``.
+        window:
+            Rolling window definition (defaults to one calendar year).
+        confidence:
+            Confidence level for the volatility band (0 < confidence < 1).
+        save_path:
+            Optional path to persist the figure.
+        show:
+            Display the figure when ``True``.
+        periods_per_year:
+            Explicit annualisation factor. When ``None`` it is inferred from the
+            median spacing between observations.
+        min_periods:
+            Override for the minimum observations required in each window.  If
+            omitted the method uses a quarter-year of data.
+        """
+
+        if returns.empty:
+            return
+        if not isinstance(returns.index, pd.DatetimeIndex):
+            raise ValueError("returns index must be a DatetimeIndex")
+        if not 0.0 < confidence < 1.0:
+            raise ValueError("confidence must be between 0 and 1")
+
+        ordered = returns.sort_index()
+        clean = ordered.fillna(0.0).astype(float)
+
+        if periods_per_year is None:
+            diffs = clean.index.to_series().diff().dropna()
+            valid = diffs[diffs > pd.Timedelta(0)]
+            if not valid.empty:
+                median_days = valid.dt.total_seconds().div(86_400).median()
+                periods_per_year = float(365.25 / median_days) if median_days else 365.25
+            else:
+                periods_per_year = 365.25
+        periods_per_year = float(periods_per_year)
+
+        if min_periods is None:
+            min_periods = max(5, int(round(periods_per_year * 0.25)))
+
+        log_returns = np.log1p(clean)
+        roll = log_returns.rolling(window=window, min_periods=min_periods)
+        mean_log = roll.mean()
+        std_log = roll.std(ddof=0).fillna(0.0)
+
+        annual_mean_log = mean_log * periods_per_year
+        annual_std_log = std_log * periods_per_year**0.5
+
+        z_score = NormalDist().inv_cdf(0.5 + confidence / 2.0)
+        apy = np.expm1(annual_mean_log)
+        lower = np.expm1(annual_mean_log - z_score * annual_std_log)
+        upper = np.expm1(annual_mean_log + z_score * annual_std_log)
+
+        apy_valid = apy.dropna(how="all")
+        if apy_valid.empty:
+            return
+
+        plt = Visualizer._plt()
+        plt.figure(figsize=(10, 6))
+        for col in apy.columns:
+            series = apy[col] * 100.0
+            if series.dropna().empty:
+                continue
+            line = plt.plot(series.index, series.values, label=str(col))[0]
+            color = line.get_color()
+            lower_series = (lower[col] * 100.0).reindex(series.index)
+            upper_series = (upper[col] * 100.0).reindex(series.index)
+            mask = ~(series.isna() | lower_series.isna() | upper_series.isna())
+            if mask.any():
+                plt.fill_between(
+                    series.index,
+                    lower_series.values,
+                    upper_series.values,
+                    where=mask.values,
+                    color=color,
+                    alpha=0.15,
+                    linewidth=0,
+                )
+        plt.xlabel("Date")
+        plt.ylabel("APY (%)")
+        plt.title("Rolling 1-Year APY")
+        if apy.shape[1] > 1:
+            plt.legend()
         plt.tight_layout()
         if save_path:
             plt.savefig(save_path, bbox_inches="tight")

@@ -187,6 +187,11 @@ def main() -> None:
             save_path=str(outdir / "nav_vs_time.png") if outdir else None,
             show=show,
         )
+        Visualizer.rolling_apy(
+            returns_ts,
+            save_path=str(outdir / "rolling_apy.png") if outdir else None,
+            show=show,
+        )
 
 
 if __name__ == "__main__":

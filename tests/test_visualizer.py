@@ -1,6 +1,7 @@
 from pathlib import Path
 
 import matplotlib
+import numpy as np
 import pandas as pd
 
 from stable_yield_lab import Visualizer
@@ -42,4 +43,18 @@ def test_line_nav_creates_file(tmp_path: Path) -> None:
     )
     out = tmp_path / "nav.png"
     Visualizer.line_nav(nav, save_path=str(out), show=False)
+    assert out.exists() and out.stat().st_size > 0
+
+
+def test_rolling_apy_creates_file(tmp_path: Path) -> None:
+    index = pd.date_range("2023-01-01", periods=400, freq="D")
+    returns = pd.DataFrame(
+        {
+            "pool_a": 0.0005,
+            "pool_b": 0.0003 + 0.0001 * np.sin(np.linspace(0.0, 6.0, len(index))),
+        },
+        index=index,
+    )
+    out = tmp_path / "rolling_apy.png"
+    Visualizer.rolling_apy(returns, save_path=str(out), show=False)
     assert out.exists() and out.stat().st_size > 0
