@@ -6,3 +6,5 @@ def test_loads_config_file() -> None:
     assert cfg["csv"]["path"].endswith("sample_pools.csv")
     assert cfg["output"]["show"] is False
     assert cfg["output"]["charts"] == ["bar", "scatter", "chain"]
+    assert cfg["benchmarks"]["tickers"] == ["PoolA", "PoolB"]
+    assert cfg["benchmarks"]["labels"]["cash"].startswith("Cash")

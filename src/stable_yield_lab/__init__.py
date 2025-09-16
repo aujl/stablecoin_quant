@@ -15,7 +15,7 @@ from collections.abc import Iterable, Iterator
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any, Mapping, Protocol
 import json
 import logging
 import urllib.request
@@ -46,11 +46,7 @@ class Pool:
     def to_dict(self) -> dict[str, Any]:
         d = asdict(self)
         # for readability in CSV
-        d["timestamp_iso"] = (
-            datetime.fromtimestamp(self.timestamp or 0, tz=UTC).isoformat()
-            if self.timestamp
-            else ""
-        )
+        d["timestamp_iso"] = datetime.fromtimestamp(self.timestamp or 0, tz=UTC).isoformat() if self.timestamp else ""
         return d
 
 
@@ -386,9 +382,7 @@ class BeefySource:
             if v.get("status") != "active":
                 continue
             assets = v.get("assets") or []
-            if not assets or not all(
-                a.upper() in STABLE_TOKENS or "USD" in a.upper() for a in assets
-            ):
+            if not assets or not all(a.upper() in STABLE_TOKENS or "USD" in a.upper() for a in assets):
                 continue
             chain = str(v.get("chain", ""))
             chain_id = self.CHAIN_IDS.get(chain.lower(), chain)
@@ -446,8 +440,7 @@ class Metrics:
                 apr_avg=("base_apy", "mean"),
                 apr_wavg=(
                     "base_apy",
-                    lambda x: (x * df.loc[x.index, "tvl_usd"]).sum()
-                    / df.loc[x.index, "tvl_usd"].sum(),
+                    lambda x: (x * df.loc[x.index, "tvl_usd"]).sum() / df.loc[x.index, "tvl_usd"].sum(),
                 ),
             )
             .reset_index()
@@ -536,9 +529,7 @@ class Visualizer:
         try:
             import matplotlib.pyplot as plt
         except Exception as exc:  # pragma: no cover
-            raise RuntimeError(
-                "matplotlib is required for visualization. Install via Poetry or pip."
-            ) from exc
+            raise RuntimeError("matplotlib is required for visualization. Install via Poetry or pip.") from exc
         return plt
 
     @staticmethod
@@ -768,6 +759,114 @@ class Visualizer:
             plt.savefig(save_path, bbox_inches="tight")
         if show:
             plt.show()
+
+    @staticmethod
+    def nav_with_benchmarks(
+        returns: pd.DataFrame,
+        *,
+        weights: pd.Series | Mapping[str, float] | None = None,
+        cash_returns: pd.Series | float | int | None = 0.0,
+        initial_investment: float = 1.0,
+        labels: Mapping[str, str] | None = None,
+        title: str = "Rebalanced NAV vs Benchmarks",
+        save_path: str | None = None,
+        show: bool = True,
+    ) -> pd.DataFrame:
+        """Plot a rebalanced NAV series against buy-and-hold and cash benchmarks.
+
+        The helper derives three trajectories from the same set of periodic
+        returns:
+
+        ``Rebalanced NAV``
+            assumes the portfolio is rebalanced to ``weights`` each period and
+            follows :func:`performance.nav_series`.
+        ``Buy & Hold``
+            allocates the initial capital according to ``weights`` once and lets
+            the positions drift without rebalancing.
+        ``Cash``
+            compounds the provided ``cash_returns`` (either a scalar rate or a
+            Series aligned with ``returns``) with discrete compounding.
+
+        Parameters
+        ----------
+        returns:
+            Wide DataFrame of periodic simple returns expressed as decimal
+            fractions.
+        weights:
+            Target rebalancing weights. When ``None`` an equal-weighted
+            portfolio is assumed.
+        cash_returns:
+            Periodic simple returns for the cash benchmark. If a scalar is
+            provided it is interpreted as a constant per-period rate.
+        initial_investment:
+            Starting NAV for all series.
+        labels:
+            Optional mapping overriding the default series labels ``rebalance``,
+            ``buy_and_hold`` and ``cash``.
+        title:
+            Chart title.
+        save_path:
+            Optional path to save the generated figure.
+        show:
+            Whether to display the figure.
+        """
+
+        if returns.empty:
+            return pd.DataFrame()
+
+        if isinstance(weights, pd.Series):
+            weight_series = weights.astype(float)
+        elif isinstance(weights, Mapping):
+            weight_series = pd.Series(weights, dtype=float)
+        else:
+            weight_series = pd.Series(1.0, index=returns.columns, dtype=float)
+
+        aligned_weights = weight_series.reindex(returns.columns).fillna(0.0)
+        total = float(aligned_weights.sum())
+        if total == 0.0:
+            raise ValueError("portfolio weights must sum to a positive value")
+        norm_weights = aligned_weights / total
+
+        rebalance_nav = nav_series(returns, weights=aligned_weights, initial=initial_investment)
+
+        clean_returns = returns.fillna(0.0)
+        growth = (1.0 + clean_returns).cumprod()
+        initial_alloc = norm_weights * float(initial_investment)
+        buy_and_hold_nav = growth.mul(initial_alloc, axis=1).sum(axis=1)
+
+        if isinstance(cash_returns, pd.Series):
+            cash_series = cash_returns.reindex(returns.index).fillna(0.0)
+        elif cash_returns is None:
+            cash_series = pd.Series(0.0, index=returns.index, dtype=float)
+        else:
+            cash_series = pd.Series(float(cash_returns), index=returns.index, dtype=float)
+        cash_growth = (1.0 + cash_series).cumprod()
+        cash_nav = float(initial_investment) * cash_growth
+
+        label_defaults = {
+            "rebalance": "Rebalanced NAV",
+            "buy_and_hold": "Buy & Hold",
+            "cash": "Cash",
+        }
+        if labels:
+            label_defaults.update(labels)
+
+        nav_df = pd.DataFrame(
+            {
+                label_defaults["rebalance"]: rebalance_nav,
+                label_defaults["buy_and_hold"]: buy_and_hold_nav,
+                label_defaults["cash"]: cash_nav,
+            }
+        )
+
+        Visualizer.line_chart(
+            nav_df,
+            title=title,
+            ylabel="NAV",
+            save_path=save_path,
+            show=show,
+        )
+        return nav_df
 
 
 # -----------------

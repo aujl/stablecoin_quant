@@ -6,6 +6,8 @@ import tomllib
 from pathlib import Path
 from typing import Any, cast
 
+import pandas as pd
+
 from stable_yield_lab import (
     CSVSource,
     HistoricalCSVSource,
@@ -16,6 +18,17 @@ from stable_yield_lab import (
     risk_metrics,
 )
 from stable_yield_lab.reporting import cross_section_report
+
+
+def _deep_update(base: dict[str, Any], updates: dict[str, Any]) -> dict[str, Any]:
+    """Recursively merge ``updates`` into ``base``."""
+
+    for key, value in updates.items():
+        if isinstance(value, dict) and isinstance(base.get(key), dict):
+            _deep_update(cast(dict[str, Any], base[key]), value)
+        else:
+            base[key] = value
+    return base
 
 
 def load_config(path: str | Path | None) -> dict[str, Any]:
@@ -46,6 +59,18 @@ def load_config(path: str | Path | None) -> dict[str, Any]:
         },
         "output": {"outdir": None, "show": True, "charts": ["bar", "scatter", "chain"]},
         "reporting": {"top_n": 10, "perf_fee_bps": 0.0, "mgmt_fee_bps": 0.0},
+        "benchmarks": {
+            "tickers": [],
+            "weights": {},
+            "cash_rate": 0.0,
+            "cash_series": None,
+            "title": "Rebalanced NAV vs Benchmarks",
+            "labels": {
+                "rebalance": "Rebalanced NAV",
+                "buy_and_hold": "Buy & Hold",
+                "cash": "Cash",
+            },
+        },
     }
 
     cfg_path = Path(path) if path else None
@@ -58,8 +83,7 @@ def load_config(path: str | Path | None) -> dict[str, Any]:
         for k, v in file_cfg.items():
 
             if isinstance(v, dict) and k in default and isinstance(default[k], dict):
-
-                cast(dict, default[k]).update(v)
+                _deep_update(cast(dict[str, Any], default[k]), cast(dict[str, Any], v))
 
             else:
 
@@ -187,6 +211,51 @@ def main() -> None:
             save_path=str(outdir / "nav_vs_time.png") if outdir else None,
             show=show,
         )
+
+        benchmark_cfg = cfg.get("benchmarks", {})
+        weights_cfg = benchmark_cfg.get("weights") or {}
+        weights = pd.Series(weights_cfg, dtype=float) if weights_cfg else None
+
+        tickers_cfg = benchmark_cfg.get("tickers") or []
+        if not tickers_cfg and weights is not None:
+            tickers_cfg = [t for t in weights.index if t in returns_ts.columns]
+        selected = [t for t in tickers_cfg if t in returns_ts.columns]
+        missing = sorted({t for t in tickers_cfg if t not in returns_ts.columns})
+        if missing:
+            print(f"[WARN] Missing benchmark tickers: {', '.join(missing)}")
+
+        portfolio_returns = returns_ts[selected] if selected else returns_ts
+        if weights is not None and not portfolio_returns.empty:
+            weights = weights.reindex(portfolio_returns.columns).fillna(0.0)
+
+        cash_returns: pd.Series | float | None
+        cash_series_name = benchmark_cfg.get("cash_series")
+        cash_returns = None
+        if cash_series_name:
+            if cash_series_name in returns_ts.columns:
+                cash_returns = returns_ts[cash_series_name]
+            else:
+                print(f"[WARN] Cash benchmark series '{cash_series_name}' not found; falling back to cash_rate.")
+
+        if cash_returns is None:
+            cash_returns = float(benchmark_cfg.get("cash_rate", 0.0))
+
+        labels_cfg = benchmark_cfg.get("labels") or {}
+        title = str(benchmark_cfg.get("title", "Rebalanced NAV vs Benchmarks"))
+
+        if not portfolio_returns.empty:
+            nav_overlay = Visualizer.nav_with_benchmarks(
+                portfolio_returns,
+                weights=weights,
+                cash_returns=cash_returns,
+                initial_investment=initial,
+                labels=labels_cfg,
+                title=title,
+                save_path=str(outdir / "nav_vs_benchmarks.png") if outdir else None,
+                show=show,
+            )
+            if outdir and nav_overlay is not None and not nav_overlay.empty:
+                nav_overlay.to_csv(outdir / "nav_vs_benchmarks.csv")
 
 
 if __name__ == "__main__":
