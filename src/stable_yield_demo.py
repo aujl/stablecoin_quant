@@ -3,8 +3,11 @@ from __future__ import annotations
 import os
 import sys
 import tomllib
+import warnings
 from pathlib import Path
 from typing import Any, cast
+
+import pandas as pd
 
 from stable_yield_lab import (
     CSVSource,
@@ -16,6 +19,16 @@ from stable_yield_lab import (
     risk_metrics,
 )
 from stable_yield_lab.reporting import cross_section_report
+
+
+def _normalise_lookbacks(raw: Any) -> dict[str, Any]:
+    """Coerce configuration lookback definitions into a labelled mapping."""
+
+    if isinstance(raw, dict):
+        return {str(k): v for k, v in raw.items()}
+    if isinstance(raw, list):
+        return {str(v): v for v in raw}
+    return {}
 
 
 def load_config(path: str | Path | None) -> dict[str, Any]:
@@ -45,7 +58,12 @@ def load_config(path: str | Path | None) -> dict[str, Any]:
             # "stablecoins": ["USDC"]
         },
         "output": {"outdir": None, "show": True, "charts": ["bar", "scatter", "chain"]},
-        "reporting": {"top_n": 10, "perf_fee_bps": 0.0, "mgmt_fee_bps": 0.0},
+        "reporting": {
+            "top_n": 10,
+            "perf_fee_bps": 0.0,
+            "mgmt_fee_bps": 0.0,
+            "realised_apy_lookbacks": {"last 2 weeks": "14D", "last 52 weeks": "52W"},
+        },
     }
 
     cfg_path = Path(path) if path else None
@@ -91,6 +109,11 @@ def main() -> None:
         except ValueError:
             pass
 
+    lookbacks_cfg = _normalise_lookbacks(cfg.get("reporting", {}).get("realised_apy_lookbacks", {}))
+    realised_apys: pd.DataFrame | None = None
+    nav_ts: pd.DataFrame | None = None
+    yield_ts_pct: pd.DataFrame | None = None
+
     # Load data
     csv_path = cfg["csv"]["path"]
     src = CSVSource(path=csv_path)
@@ -120,14 +143,68 @@ def main() -> None:
     show = bool(out.get("show", True)) if not outdir else False
     charts = out.get("charts", [])
 
-    # Risk metrics derived from time-series returns (base APY as placeholder)
-    returns = df.pivot_table(index="timestamp", columns="name", values="base_apy")
+    pool_names = {pool.name for pool in filtered}
+    history_path = cfg.get("yields_csv")
+    historical_returns = pd.DataFrame()
+    if history_path:
+        hist_src = HistoricalCSVSource(str(history_path))
+        historical_returns = Pipeline([hist_src]).run_history()
+        if historical_returns.empty:
+            warnings.warn(
+                f"Historical returns from {history_path} produced no rows; skipping risk metrics.",
+                stacklevel=2,
+            )
+    else:
+        warnings.warn("No historical returns configured; skipping risk metrics.", stacklevel=2)
+
+    returns_for_metrics = pd.DataFrame()
+    if pool_names and not historical_returns.empty:
+        matched_cols = [col for col in historical_returns.columns if col in pool_names]
+        if matched_cols:
+            matched_returns = historical_returns.loc[:, matched_cols]
+            matched_returns = matched_returns.dropna(axis=1, how="all").dropna(how="all")
+            if matched_returns.empty or matched_returns.columns.empty:
+                warnings.warn(
+                    "Historical returns contain only missing values after filtering; skipping risk metrics.",
+                    stacklevel=2,
+                )
+            else:
+                returns_for_metrics = matched_returns
+        else:
+            warnings.warn(
+                "No historical returns matched the filtered pools; skipping risk metrics.",
+                stacklevel=2,
+            )
+    elif not pool_names:
+        warnings.warn("No pools available after filtering; skipping risk metrics.", stacklevel=2)
+
     stats = frontier = None
-    try:
-        stats = risk_metrics.summary_statistics(returns)
-        frontier = risk_metrics.efficient_frontier(returns)
-    except Exception as exc:
-        print(f"Skipping risk metrics: {exc}")
+    if not returns_for_metrics.empty:
+        try:
+            stats = risk_metrics.summary_statistics(returns_for_metrics)
+            frontier = risk_metrics.efficient_frontier(returns_for_metrics)
+        except Exception as exc:
+            print(f"Skipping risk metrics: {exc}")
+
+    if cfg.get("yields_csv"):
+        hist_src = HistoricalCSVSource(str(cfg["yields_csv"]))
+        returns_ts = Pipeline([hist_src]).run_history()
+        if not returns_ts.empty:
+            initial = float(cfg.get("initial_investment", 1.0))
+            nav_ts = performance.nav_trajectories(returns_ts, initial_investment=initial)
+            yield_ts_pct = performance.yield_trajectories(returns_ts) * 100.0
+            if lookbacks_cfg:
+                apy_table = performance.horizon_apys(nav_ts, lookbacks=lookbacks_cfg, value_type="nav")
+                if not apy_table.empty:
+                    apy_table = apy_table.rename(
+                        columns={label: f"Realised APY ({label})" for label in apy_table.columns}
+                    )
+                    realised_apys = apy_table
+                    if not df.empty:
+                        df = df.merge(apy_table, left_on="name", right_index=True, how="left")
+                    pretty = apy_table.mul(100.0).round(2)
+                    print("Realised APY horizons (annualised, %):")
+                    print(pretty.to_string())
 
     if outdir:
         outdir.mkdir(parents=True, exist_ok=True)
@@ -137,6 +214,7 @@ def main() -> None:
             perf_fee_bps=float(cfg.get("reporting", {}).get("perf_fee_bps", 0.0)),
             mgmt_fee_bps=float(cfg.get("reporting", {}).get("mgmt_fee_bps", 0.0)),
             top_n=top_n,
+            horizon_apys=realised_apys,
         )
         if stats is not None:
             stats.to_csv(outdir / "risk_stats.csv")
@@ -167,19 +245,20 @@ def main() -> None:
         )
 
     # Performance trajectories from historical yields
-    if cfg.get("yields_csv"):
-        hist_src = HistoricalCSVSource(str(cfg["yields_csv"]))
-        returns_ts = Pipeline([hist_src]).run_history()
+    returns_for_nav = returns_for_metrics if not returns_for_metrics.empty else historical_returns
+    if not returns_for_nav.empty:
         initial = float(cfg.get("initial_investment", 1.0))
-        nav_ts = performance.nav_trajectories(returns_ts, initial_investment=initial)
-        yield_ts = performance.yield_trajectories(returns_ts) * 100.0
+        nav_ts = performance.nav_trajectories(returns_for_nav, initial_investment=initial)
+        yield_ts = performance.yield_trajectories(returns_for_nav) * 100.0
+
         Visualizer.line_chart(
-            yield_ts,
+            yield_ts_pct,
             title="Yield over time",
             ylabel="Yield (%)",
             save_path=str(outdir / "yield_vs_time.png") if outdir else None,
             show=show,
         )
+    if nav_ts is not None:
         Visualizer.line_chart(
             nav_ts,
             title="NAV over time",
