@@ -3,29 +3,77 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
-from stable_yield_lab import HistoricalCSVSource, Pipeline
+from stable_yield_lab import (
+    DataQualityError,
+    DataQualityWarning,
+    HistoricalCSVSource,
+    Pipeline,
+)
 
 
 def test_historical_csv_parsing_and_alignment() -> None:
     csv_path = Path(__file__).resolve().parent.parent / "src" / "sample_yields.csv"
     src = HistoricalCSVSource(str(csv_path))
-    df = Pipeline([src]).run_history()
-
-    expected = {"Morpho USDC (ETH)", "Aave USDT v3 (Polygon)", "Curve 3Pool Convex (ETH)"}
-    assert expected.issubset(df.columns)
+    with pytest.warns(DataQualityWarning):
+        df = Pipeline([src]).run_history()
+    assert list(df.columns) == ["PoolA", "PoolB"]
     assert df.index.tz is not None
-    assert df.shape[0] >= 52
+    assert list(df.index) == list(pd.date_range("2024-01-01", "2024-01-15", freq="W-MON", tz="UTC"))
+    assert df.shape == (3, 2)
+    assert df.loc[pd.Timestamp("2024-01-08", tz="UTC"), "PoolB"] == pytest.approx(0.008)
+    assert df.loc[pd.Timestamp("2024-01-15", tz="UTC"), "PoolA"] == pytest.approx(0.011)
+    diag_pool_b = src.last_diagnostics["PoolB"]
+    assert diag_pool_b.missing_periods == 1
+    assert diag_pool_b.filled_periods == 1
+    assert diag_pool_b.remaining_missing == 0
 
-    morpho_window = df.loc[
-        pd.Timestamp("2023-03-05", tz="UTC") : pd.Timestamp("2023-04-09", tz="UTC"),
-        "Morpho USDC (ETH)",
-    ]
-    assert morpho_window.loc[pd.Timestamp("2023-03-12", tz="UTC")] == pytest.approx(-0.018, rel=1e-9)
-    assert morpho_window.min() < 0
 
-    curve_stress = df.loc[
-        pd.Timestamp("2023-09-03", tz="UTC") : pd.Timestamp("2023-09-24", tz="UTC"),
-        "Curve 3Pool Convex (ETH)",
-    ]
-    assert curve_stress.loc[pd.Timestamp("2023-09-10", tz="UTC")] == pytest.approx(-0.013, rel=1e-9)
-    assert (df["Aave USDT v3 (Polygon)"] < 0).sum() >= 2
+def test_historical_resample_and_fill_daily(tmp_path: Path) -> None:
+    csv_path = tmp_path / "history.csv"
+    csv_path.write_text(
+        """timestamp,name,period_return\n"
+        "2024-01-01,PoolA,0.010\n"
+        "2024-01-03,PoolA,0.015\n"
+        "2024-01-01,PoolB,0.020\n"
+        "2024-01-04,PoolB,0.018\n"""
+    )
+    src = HistoricalCSVSource(str(csv_path), target_frequency="D", fill_strategy="ffill", min_observations=2)
+    with pytest.warns(DataQualityWarning):
+        df = Pipeline([src]).run_history()
+    expected_index = pd.date_range("2024-01-01", "2024-01-04", freq="D", tz="UTC")
+    assert list(df.index) == list(expected_index)
+    assert df.loc[pd.Timestamp("2024-01-02", tz="UTC"), "PoolA"] == pytest.approx(0.010)
+    assert df.loc[pd.Timestamp("2024-01-03", tz="UTC"), "PoolB"] == pytest.approx(0.020)
+    diag_pool_a = src.last_diagnostics["PoolA"]
+    assert diag_pool_a.missing_periods == 2
+    assert diag_pool_a.filled_periods == 2
+    assert diag_pool_a.remaining_missing == 0
+
+
+def test_historical_min_observations_threshold(tmp_path: Path) -> None:
+    csv_path = tmp_path / "history.csv"
+    csv_path.write_text(
+        """timestamp,name,period_return\n"
+        "2024-01-01,PoolA,0.010\n"
+        "2024-01-08,PoolA,0.012\n"""
+    )
+    src = HistoricalCSVSource(str(csv_path), target_frequency="W-MON", min_observations=3)
+    with pytest.raises(DataQualityError, match="PoolA"):
+        src.fetch()
+
+
+def test_historical_zero_fill_strategy(tmp_path: Path) -> None:
+    csv_path = tmp_path / "history.csv"
+    csv_path.write_text(
+        """timestamp,name,period_return\n"
+        "2024-01-01,PoolA,0.010\n"
+        "2024-01-04,PoolA,0.013\n"""
+    )
+    src = HistoricalCSVSource(str(csv_path), target_frequency="D", fill_strategy="zero", min_observations=1)
+    with pytest.warns(DataQualityWarning):
+        df = Pipeline([src]).run_history()
+    assert df.loc[pd.Timestamp("2024-01-02", tz="UTC"), "PoolA"] == pytest.approx(0.0)
+    assert df.loc[pd.Timestamp("2024-01-03", tz="UTC"), "PoolA"] == pytest.approx(0.0)
+    diag_pool_a = src.last_diagnostics["PoolA"]
+    assert diag_pool_a.filled_periods == 2
+    assert diag_pool_a.remaining_missing == 0
