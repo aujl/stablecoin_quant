@@ -1,0 +1,6 @@
+timestamp,name,period_return
+2024-01-01T00:00:00Z,PoolIrregularA,0.010
+2024-01-03T12:00:00Z,PoolIrregularA,0.015
+2024-01-09T00:00:00Z,PoolIrregularA,-0.005
+2024-01-02T00:00:00Z,PoolIrregularB,0.020
+2024-01-08T06:00:00Z,PoolIrregularB,0.010
