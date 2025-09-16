@@ -49,6 +49,14 @@ Inspect `artifacts/nav_curve.png` (or the interactive Matplotlib window if `show
 
 Open `artifacts/yield_curve.png` to review the annualised yield profile. Yield spikes or drops highlight weeks where realised returns diverged from the long-run average—use them to annotate catalysts in investor updates or to stress-test assumptions.
 
+### Concentration & Risk Table
+
+The demo also emits `concentration.csv`, which now includes per-scope Sharpe, Sortino,
+maximum drawdown, and negative-period share metrics whenever historical returns are
+available. Filter rows whose `scope` begins with `pool:` to compare individual vault
+histories, or look at the aggregate `total` and `chain:<name>` entries to understand
+how diversification and platform choice affect realised performance.
+
 ## 4. Compare with riskfolio
 
 The portfolio behaviour resembles the [Riskfolio-Lib portfolio optimization example](https://riskfolio-lib.readthedocs.io/en/latest/portfolio.html), which uses `rp.Portfolio` to build efficient frontiers from historical returns. Matching NAV and yield trajectories across both libraries provides credibility that the calculations align with industry-standard techniques.

@@ -114,14 +114,21 @@ def main() -> None:
     top_n = int(cfg.get("reporting", {}).get("top_n", 10))
     Metrics.top_n(filtered, n=top_n, key="base_apy")
 
+    returns_ts = None
+    if cfg.get("yields_csv"):
+        hist_src = HistoricalCSVSource(str(cfg["yields_csv"]))
+        returns_ts = Pipeline([hist_src]).run_history()
+
     # Outputs
     out = cfg.get("output", {})
     outdir = Path(out.get("outdir") or "") if out.get("outdir") else None
     show = bool(out.get("show", True)) if not outdir else False
     charts = out.get("charts", [])
 
-    # Risk metrics derived from time-series returns (base APY as placeholder)
-    returns = df.pivot_table(index="timestamp", columns="name", values="base_apy")
+    # Risk metrics derived from time-series returns
+    returns = (
+        returns_ts if returns_ts is not None else df.pivot_table(index="timestamp", columns="name", values="base_apy")
+    )
     stats = frontier = None
     try:
         stats = risk_metrics.summary_statistics(returns)
@@ -137,6 +144,7 @@ def main() -> None:
             perf_fee_bps=float(cfg.get("reporting", {}).get("perf_fee_bps", 0.0)),
             mgmt_fee_bps=float(cfg.get("reporting", {}).get("mgmt_fee_bps", 0.0)),
             top_n=top_n,
+            returns=returns_ts,
         )
         if stats is not None:
             stats.to_csv(outdir / "risk_stats.csv")
@@ -167,9 +175,7 @@ def main() -> None:
         )
 
     # Performance trajectories from historical yields
-    if cfg.get("yields_csv"):
-        hist_src = HistoricalCSVSource(str(cfg["yields_csv"]))
-        returns_ts = Pipeline([hist_src]).run_history()
+    if returns_ts is not None and not returns_ts.empty:
         initial = float(cfg.get("initial_investment", 1.0))
         nav_ts = performance.nav_trajectories(returns_ts, initial_investment=initial)
         yield_ts = performance.yield_trajectories(returns_ts) * 100.0

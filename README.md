@@ -46,6 +46,24 @@ The script applies `stable_yield_lab.performance.nav_curve` and `performance.yie
 A steadily rising NAV indicates compounding growth; falling or flat lines flag underperformance.
 For a step-by-step example, see [docs/investor_walkthrough.md](docs/investor_walkthrough.md).
 
+### Cross-Section Risk Reporting
+
+`stable_yield_lab.reporting.cross_section_report` now enriches the `concentration.csv`
+output with realised risk statistics whenever you supply historical returns. Pass a
+wide DataFrame of periodic returns (columns correspond to pool names) via the
+`returns` argument—`HistoricalCSVSource` and `ReturnRepository` make it easy to load
+bundled fixtures. The resulting CSV includes:
+
+- `scope`: `total`, `chain:<name>`, `stablecoin:<symbol>`, and `pool:<name>` rows.
+- `hhi`: Herfindahl–Hirschman Index based on TVL (unchanged from before).
+- `sharpe_ratio`: Sample mean of realised returns divided by sample volatility.
+- `sortino_ratio`: Mean return divided by downside deviation (negative periods only).
+- `max_drawdown`: Worst peak-to-trough loss computed from a discrete-compounded NAV path.
+- `negative_period_share`: Fraction of periods with negative realised returns.
+
+When no return history is provided the new columns still appear but are populated with
+`NaN`, preserving backwards compatibility for downstream tooling.
+
 ## Codex Workflows
 
 GitHub workflows tag [@codex](https://github.com/features/copilot) to request automated pull request reviews,
