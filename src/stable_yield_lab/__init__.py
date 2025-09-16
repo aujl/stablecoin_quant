@@ -21,7 +21,7 @@ import logging
 import urllib.request
 import pandas as pd
 
-from . import performance, risk_scoring
+from . import attribution, performance, risk_scoring
 from .performance import cumulative_return, nav_series
 
 
@@ -824,4 +824,5 @@ __all__ = [
     "portfolio",
     "risk_scoring",
     "performance",
+    "attribution",
 ]

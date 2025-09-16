@@ -12,10 +12,11 @@ from stable_yield_lab import (
     Metrics,
     Pipeline,
     Visualizer,
+    attribution,
     performance,
     risk_metrics,
 )
-from stable_yield_lab.reporting import cross_section_report
+from stable_yield_lab.reporting import cross_section_report, summarize_attribution
 
 
 def load_config(path: str | Path | None) -> dict[str, Any]:
@@ -36,6 +37,7 @@ def load_config(path: str | Path | None) -> dict[str, Any]:
     default = {
         "csv": {"path": str(Path(__file__).with_name("sample_pools.csv"))},
         "yields_csv": str(Path(__file__).with_name("sample_yields.csv")),
+        "weights_csv": None,
         "initial_investment": 1_000.0,
         "filters": {
             "min_tvl": 100_000,
@@ -45,7 +47,13 @@ def load_config(path: str | Path | None) -> dict[str, Any]:
             # "stablecoins": ["USDC"]
         },
         "output": {"outdir": None, "show": True, "charts": ["bar", "scatter", "chain"]},
-        "reporting": {"top_n": 10, "perf_fee_bps": 0.0, "mgmt_fee_bps": 0.0},
+        "reporting": {
+            "top_n": 10,
+            "perf_fee_bps": 0.0,
+            "mgmt_fee_bps": 0.0,
+            "periods_per_year": 52,
+            "attribution_console": False,
+        },
     }
 
     cfg_path = Path(path) if path else None
@@ -85,11 +93,17 @@ def main() -> None:
         cfg.setdefault("output", {})["outdir"] = outdir_env
     if yields_env := os.getenv("STABLE_YIELD_YIELDS_CSV"):
         cfg["yields_csv"] = yields_env
+    if weights_env := os.getenv("STABLE_YIELD_WEIGHTS_CSV"):
+        cfg["weights_csv"] = weights_env
     if init_env := os.getenv("STABLE_YIELD_INITIAL_INVESTMENT"):
         try:
             cfg["initial_investment"] = float(init_env)
         except ValueError:
             pass
+
+    reporting_cfg = cfg.get("reporting", {})
+    periods_per_year = float(reporting_cfg.get("periods_per_year", 52.0))
+    attribution_console = bool(reporting_cfg.get("attribution_console", False))
 
     # Load data
     csv_path = cfg["csv"]["path"]
@@ -111,7 +125,7 @@ def main() -> None:
 
     # Summaries
     by_chain = Metrics.groupby_chain(filtered)
-    top_n = int(cfg.get("reporting", {}).get("top_n", 10))
+    top_n = int(reporting_cfg.get("top_n", 10))
     Metrics.top_n(filtered, n=top_n, key="base_apy")
 
     # Outputs
@@ -129,19 +143,43 @@ def main() -> None:
     except Exception as exc:
         print(f"Skipping risk metrics: {exc}")
 
+    returns_ts = None
+    if cfg.get("yields_csv"):
+        hist_src = HistoricalCSVSource(str(cfg["yields_csv"]))
+        returns_ts = Pipeline([hist_src]).run_history()
+
+    weight_schedule = None
+    weights_path = cfg.get("weights_csv")
+    if weights_path:
+        try:
+            weight_schedule = attribution.load_weight_schedule(str(weights_path))
+        except Exception as exc:  # pragma: no cover - demo resilience
+            print(f"[WARN] Failed to load weight schedule: {exc}")
+
     if outdir:
         outdir.mkdir(parents=True, exist_ok=True)
         cross_section_report(
             filtered,
             outdir,
-            perf_fee_bps=float(cfg.get("reporting", {}).get("perf_fee_bps", 0.0)),
-            mgmt_fee_bps=float(cfg.get("reporting", {}).get("mgmt_fee_bps", 0.0)),
+            perf_fee_bps=float(reporting_cfg.get("perf_fee_bps", 0.0)),
+            mgmt_fee_bps=float(reporting_cfg.get("mgmt_fee_bps", 0.0)),
             top_n=top_n,
+            returns=returns_ts if returns_ts is not None and not returns_ts.empty else None,
+            weight_schedule=weight_schedule,
+            attribution_periods_per_year=periods_per_year,
+            attribution_console=attribution_console,
         )
         if stats is not None:
             stats.to_csv(outdir / "risk_stats.csv")
         if frontier is not None:
             frontier.to_csv(outdir / "efficient_frontier.csv", index=False)
+    elif attribution_console and returns_ts is not None and not returns_ts.empty:
+        attr_result = attribution.compute_attribution(
+            returns_ts,
+            weight_schedule,
+            periods_per_year=periods_per_year,
+        )
+        summarize_attribution(attr_result)
 
     if "scatter" in charts:
         if "volatility" in df.columns:
@@ -167,9 +205,7 @@ def main() -> None:
         )
 
     # Performance trajectories from historical yields
-    if cfg.get("yields_csv"):
-        hist_src = HistoricalCSVSource(str(cfg["yields_csv"]))
-        returns_ts = Pipeline([hist_src]).run_history()
+    if returns_ts is not None and not returns_ts.empty:
         initial = float(cfg.get("initial_investment", 1.0))
         nav_ts = performance.nav_trajectories(returns_ts, initial_investment=initial)
         yield_ts = performance.yield_trajectories(returns_ts) * 100.0
