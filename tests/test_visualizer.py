@@ -43,3 +43,35 @@ def test_line_nav_creates_file(tmp_path: Path) -> None:
     out = tmp_path / "nav.png"
     Visualizer.line_nav(nav, save_path=str(out), show=False)
     assert out.exists() and out.stat().st_size > 0
+
+
+def test_hist_period_returns_creates_file(tmp_path: Path) -> None:
+    returns = pd.DataFrame(
+        {
+            "PoolA": [0.01, 0.015, -0.005, 0.012],
+            "PoolB": [0.008, 0.01, 0.011, 0.009],
+        },
+        index=pd.date_range("2023-01-01", periods=4, freq="W"),
+    )
+    out = tmp_path / "hist_returns.png"
+    Visualizer.hist_period_returns(returns, bins=5, save_path=str(out), show=False)
+    assert out.exists() and out.stat().st_size > 0
+
+
+def test_boxplot_rolling_apy_creates_file(tmp_path: Path) -> None:
+    returns = pd.DataFrame(
+        {
+            "PoolA": [0.01, 0.012, -0.004, 0.015, 0.009],
+            "PoolB": [0.008, 0.007, 0.01, 0.011, 0.012],
+        },
+        index=pd.date_range("2023-01-01", periods=5, freq="W"),
+    )
+    out = tmp_path / "rolling_apy_box.png"
+    Visualizer.boxplot_rolling_apy(
+        returns,
+        window=3,
+        periods_per_year=52,
+        save_path=str(out),
+        show=False,
+    )
+    assert out.exists() and out.stat().st_size > 0

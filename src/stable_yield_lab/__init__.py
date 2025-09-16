@@ -769,6 +769,146 @@ class Visualizer:
         if show:
             plt.show()
 
+    @staticmethod
+    def hist_period_returns(
+        returns: pd.DataFrame | pd.Series,
+        title: str = "Distribution of Period Returns",
+        *,
+        bins: int = 20,
+        save_path: str | None = None,
+        show: bool = True,
+    ) -> None:
+        """Plot the empirical distribution of periodic simple returns.
+
+        The histogram visualises samples of :math:`r_t`, the discrete simple
+        return for period ``t`` expressed as a decimal fraction. Bins are
+        displayed in percentage terms for readability.
+
+        Parameters
+        ----------
+        returns:
+            Series or DataFrame containing periodic returns. All non-missing
+            entries are used in the histogram.
+        title:
+            Plot title.
+        bins:
+            Number of histogram bins. Must be positive.
+        save_path:
+            Optional path to save the figure as a PNG. When ``None`` the plot
+            is not exported to disk.
+        show:
+            Display the matplotlib window when ``True``.
+        """
+
+        if bins <= 0:
+            raise ValueError("bins must be positive")
+
+        df = returns.to_frame() if isinstance(returns, pd.Series) else returns
+        if df.empty:
+            return
+
+        samples = df.stack().dropna()
+        if samples.empty:
+            return
+
+        plt = Visualizer._plt()
+        plt.figure(figsize=(10, 6))
+        plt.hist(samples.to_numpy() * 100.0, bins=bins, edgecolor="black", alpha=0.75)
+        plt.xlabel("Period return (%)")
+        plt.ylabel("Frequency")
+        plt.title(title)
+        plt.tight_layout()
+        if save_path:
+            plt.savefig(save_path, bbox_inches="tight")
+        if show:
+            plt.show()
+
+    @staticmethod
+    def boxplot_rolling_apy(
+        returns: pd.DataFrame | pd.Series,
+        *,
+        window: int,
+        periods_per_year: int = 52,
+        title: str | None = None,
+        save_path: str | None = None,
+        show: bool = True,
+    ) -> None:
+        r"""Box plot of annualised rolling APYs derived from periodic returns.
+
+        For each asset the ``window``-period compounded return is computed as
+
+        .. math::
+           R_t = \prod_{i=0}^{w-1} (1 + r_{t-i}) - 1,
+
+        where :math:`r` denotes the simple return. The corresponding annualised
+        APY assumes ``periods_per_year`` compounding periods and equals
+
+        .. math::
+           \text{APY}_t = (1 + R_t)^{\frac{\text{periods\_per\_year}}{w}} - 1.
+
+        Parameters
+        ----------
+        returns:
+            Series or DataFrame of periodic simple returns.
+        window:
+            Rolling window size in periods. Must be strictly positive.
+        periods_per_year:
+            Number of return observations per year used for annualisation.
+        title:
+            Optional plot title. When ``None`` a descriptive default is used.
+        save_path:
+            Optional path to export the figure as a PNG.
+        show:
+            Display the matplotlib window when ``True``.
+        """
+
+        if window <= 0:
+            raise ValueError("window must be positive")
+        if periods_per_year <= 0:
+            raise ValueError("periods_per_year must be positive")
+
+        df = returns.to_frame() if isinstance(returns, pd.Series) else returns
+        if df.empty:
+            return
+
+        growth = (1.0 + df.fillna(0.0)).rolling(window=window, min_periods=window).apply(
+            lambda arr: float(arr.prod()), raw=True
+        )
+        window_return = growth - 1.0
+        annual_factor = periods_per_year / float(window)
+        rolling_apy = (1.0 + window_return).pow(annual_factor) - 1.0
+        clean = rolling_apy.dropna(how="all")
+        if clean.empty:
+            return
+
+        box_data: list[list[float]] = []
+        labels: list[str] = []
+        for col in clean.columns:
+            series = clean[col].dropna()
+            if series.empty:
+                continue
+            box_data.append((series * 100.0).to_list())
+            labels.append(str(col))
+
+        if not box_data:
+            return
+
+        plt = Visualizer._plt()
+        plt.figure(figsize=(10, 6))
+        plt.boxplot(box_data, labels=labels, orientation="vertical")
+        plt.ylabel("Rolling APY (%)")
+        if title:
+            plt.title(title)
+        else:
+            plt.title(f"{window}-period Rolling APY Distribution")
+        if len(labels) > 6:
+            plt.xticks(rotation=45, ha="right")
+        plt.tight_layout()
+        if save_path:
+            plt.savefig(save_path, bbox_inches="tight")
+        if show:
+            plt.show()
+
 
 # -----------------
 # Pipeline

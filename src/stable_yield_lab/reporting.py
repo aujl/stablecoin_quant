@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from . import Metrics, PoolRepository
+from . import Metrics, PoolRepository, Visualizer
 
 
 def _ensure_outdir(outdir: str | Path) -> Path:
@@ -16,10 +16,15 @@ def _ensure_outdir(outdir: str | Path) -> Path:
 def cross_section_report(
     repo: PoolRepository,
     outdir: str | Path,
+    period_returns: pd.DataFrame | None = None,
     *,
     perf_fee_bps: float = 0.0,
     mgmt_fee_bps: float = 0.0,
     top_n: int = 20,
+    include_period_return_hist: bool = False,
+    include_rolling_apy_box: bool = False,
+    rolling_window: int = 30,
+    rolling_periods_per_year: int = 52,
 ) -> dict[str, Path]:
     """Generate file-first CSV outputs for the given snapshot repository.
 
@@ -30,6 +35,11 @@ def cross_section_report(
       - by_stablecoin.csv: aggregated by stablecoin symbol
       - topN.csv: top-N pools by base_apy
       - concentration.csv: HHI metrics across chain and stablecoin
+    Optional charts (PNG) are exported when ``period_returns`` is provided and
+    the corresponding toggle is enabled:
+      - period_return_histogram.png: histogram of periodic return samples
+      - rolling_apy_boxplot.png: box plot of annualised rolling APYs
+
     Returns a dict of file label -> path for convenience.
     """
     out = _ensure_outdir(outdir)
@@ -87,5 +97,30 @@ def cross_section_report(
     )
     paths["concentration"] = out / "concentration.csv"
     conc_all.to_csv(paths["concentration"], index=False)
+
+    returns_df = None
+    if period_returns is not None:
+        returns_df = period_returns.to_frame() if isinstance(period_returns, pd.Series) else period_returns
+    if returns_df is not None and not returns_df.empty:
+        if include_period_return_hist:
+            hist_path = out / "period_return_histogram.png"
+            Visualizer.hist_period_returns(
+                returns_df,
+                title="Distribution of Period Returns",
+                save_path=str(hist_path),
+                show=False,
+            )
+            paths["period_return_histogram"] = hist_path
+        if include_rolling_apy_box:
+            box_path = out / "rolling_apy_boxplot.png"
+            Visualizer.boxplot_rolling_apy(
+                returns_df,
+                window=rolling_window,
+                periods_per_year=rolling_periods_per_year,
+                title=f"{rolling_window}-period Rolling APY Distribution",
+                save_path=str(box_path),
+                show=False,
+            )
+            paths["rolling_apy_boxplot"] = box_path
 
     return paths

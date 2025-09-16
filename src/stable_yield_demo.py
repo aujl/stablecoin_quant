@@ -45,7 +45,15 @@ def load_config(path: str | Path | None) -> dict[str, Any]:
             # "stablecoins": ["USDC"]
         },
         "output": {"outdir": None, "show": True, "charts": ["bar", "scatter", "chain"]},
-        "reporting": {"top_n": 10, "perf_fee_bps": 0.0, "mgmt_fee_bps": 0.0},
+        "reporting": {
+            "top_n": 10,
+            "perf_fee_bps": 0.0,
+            "mgmt_fee_bps": 0.0,
+            "period_return_hist": False,
+            "rolling_apy_box": False,
+            "rolling_window": 30,
+            "rolling_periods_per_year": 52,
+        },
     }
 
     cfg_path = Path(path) if path else None
@@ -110,15 +118,26 @@ def main() -> None:
     print(f"Pools after filter: {len(df)}")
 
     # Summaries
+    reporting_cfg = cfg.get("reporting", {})
     by_chain = Metrics.groupby_chain(filtered)
-    top_n = int(cfg.get("reporting", {}).get("top_n", 10))
+    top_n = int(reporting_cfg.get("top_n", 10))
     Metrics.top_n(filtered, n=top_n, key="base_apy")
+
+    rolling_window = int(reporting_cfg.get("rolling_window", 30))
+    rolling_periods_per_year = int(reporting_cfg.get("rolling_periods_per_year", 52))
+    include_return_hist = bool(reporting_cfg.get("period_return_hist", False))
+    include_rolling_box = bool(reporting_cfg.get("rolling_apy_box", False))
 
     # Outputs
     out = cfg.get("output", {})
     outdir = Path(out.get("outdir") or "") if out.get("outdir") else None
     show = bool(out.get("show", True)) if not outdir else False
     charts = out.get("charts", [])
+
+    returns_ts = None
+    if cfg.get("yields_csv"):
+        hist_src = HistoricalCSVSource(str(cfg["yields_csv"]))
+        returns_ts = Pipeline([hist_src]).run_history()
 
     # Risk metrics derived from time-series returns (base APY as placeholder)
     returns = df.pivot_table(index="timestamp", columns="name", values="base_apy")
@@ -131,12 +150,18 @@ def main() -> None:
 
     if outdir:
         outdir.mkdir(parents=True, exist_ok=True)
+        ts_for_report = returns_ts if returns_ts is not None and not returns_ts.empty else None
         cross_section_report(
             filtered,
             outdir,
-            perf_fee_bps=float(cfg.get("reporting", {}).get("perf_fee_bps", 0.0)),
-            mgmt_fee_bps=float(cfg.get("reporting", {}).get("mgmt_fee_bps", 0.0)),
+            period_returns=ts_for_report,
+            perf_fee_bps=float(reporting_cfg.get("perf_fee_bps", 0.0)),
+            mgmt_fee_bps=float(reporting_cfg.get("mgmt_fee_bps", 0.0)),
             top_n=top_n,
+            include_period_return_hist=include_return_hist,
+            include_rolling_apy_box=include_rolling_box,
+            rolling_window=rolling_window,
+            rolling_periods_per_year=rolling_periods_per_year,
         )
         if stats is not None:
             stats.to_csv(outdir / "risk_stats.csv")
@@ -167,9 +192,7 @@ def main() -> None:
         )
 
     # Performance trajectories from historical yields
-    if cfg.get("yields_csv"):
-        hist_src = HistoricalCSVSource(str(cfg["yields_csv"]))
-        returns_ts = Pipeline([hist_src]).run_history()
+    if returns_ts is not None and not returns_ts.empty:
         initial = float(cfg.get("initial_investment", 1.0))
         nav_ts = performance.nav_trajectories(returns_ts, initial_investment=initial)
         yield_ts = performance.yield_trajectories(returns_ts) * 100.0
@@ -187,6 +210,24 @@ def main() -> None:
             save_path=str(outdir / "nav_vs_time.png") if outdir else None,
             show=show,
         )
+        if "period_return_hist" in charts:
+            Visualizer.hist_period_returns(
+                returns_ts,
+                title="Distribution of Period Returns",
+                save_path=str(outdir / "hist_period_returns.png") if outdir else None,
+                show=show,
+            )
+        if "rolling_apy_box" in charts:
+            Visualizer.boxplot_rolling_apy(
+                returns_ts,
+                window=rolling_window,
+                periods_per_year=rolling_periods_per_year,
+                title=f"{rolling_window}-period Rolling APY Distribution",
+                save_path=str(outdir / "rolling_apy_box.png") if outdir else None,
+                show=show,
+            )
+    elif cfg.get("yields_csv"):
+        print("Historical returns unavailable for plotting.")
 
 
 if __name__ == "__main__":
