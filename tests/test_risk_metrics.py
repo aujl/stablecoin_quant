@@ -11,6 +11,30 @@ import stable_yield_demo
 from stable_yield_lab import risk_metrics
 
 
+def _write_pools_csv(path: Path, names: list[str]) -> None:
+    rows = []
+    for i, name in enumerate(names):
+        rows.append(
+            {
+                "name": name,
+                "chain": "TestChain",
+                "stablecoin": "USDC",
+                "tvl_usd": 100_000 + i * 10_000,
+                "base_apy": 0.07 + 0.01 * i,
+                "reward_apy": 0.0,
+                "is_auto": True,
+                "source": "unit-test",
+                "risk_score": 2.0,
+                "timestamp": 1_700_000_000,
+            }
+        )
+    pd.DataFrame(rows).to_csv(path, index=False)
+
+
+def _write_history_csv(path: Path, rows: list[tuple[str, str, float]]) -> None:
+    pd.DataFrame(rows, columns=["timestamp", "name", "period_return"]).to_csv(path, index=False)
+
+
 def test_requires_riskfolio(monkeypatch: pytest.MonkeyPatch) -> None:
     original_import: Any = builtins.__import__
 
@@ -65,9 +89,19 @@ def test_demo_writes_risk_csvs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) 
     monkeypatch.setattr(risk_metrics, "summary_statistics", lambda df: stats_df)
     monkeypatch.setattr(risk_metrics, "efficient_frontier", lambda df: frontier_df)
 
-    csv_path = Path(__file__).resolve().parents[1] / "src/sample_pools.csv"
+    csv_path = tmp_path / "pools.csv"
+    history_path = tmp_path / "history.csv"
     outdir = tmp_path / "out"
+    _write_pools_csv(csv_path, ["PoolA"])
+    _write_history_csv(
+        history_path,
+        [
+            ("2024-01-01", "PoolA", 0.01),
+            ("2024-01-08", "PoolA", 0.011),
+        ],
+    )
     monkeypatch.setenv("STABLE_YIELD_CSV", str(csv_path))
+    monkeypatch.setenv("STABLE_YIELD_YIELDS_CSV", str(history_path))
     monkeypatch.setenv("STABLE_YIELD_OUTDIR", str(outdir))
     monkeypatch.setattr(sys, "argv", ["prog"])
     stable_yield_demo.main()
@@ -85,12 +119,106 @@ def test_demo_skips_risk_metrics_when_missing(
     monkeypatch.setattr(risk_metrics, "summary_statistics", fail)
     monkeypatch.setattr(risk_metrics, "efficient_frontier", fail)
 
-    csv_path = Path(__file__).resolve().parents[1] / "src/sample_pools.csv"
+    csv_path = tmp_path / "pools.csv"
+    history_path = tmp_path / "history.csv"
+    _write_pools_csv(csv_path, ["PoolA"])
+    _write_history_csv(
+        history_path,
+        [
+            ("2024-01-01", "PoolA", 0.01),
+            ("2024-01-08", "PoolA", 0.011),
+        ],
+    )
     outdir = tmp_path / "out"
     monkeypatch.setenv("STABLE_YIELD_CSV", str(csv_path))
+    monkeypatch.setenv("STABLE_YIELD_YIELDS_CSV", str(history_path))
     monkeypatch.setenv("STABLE_YIELD_OUTDIR", str(outdir))
     monkeypatch.setattr(sys, "argv", ["prog"])
     stable_yield_demo.main()
 
     assert not (outdir / "risk_stats.csv").exists()
     assert not (outdir / "efficient_frontier.csv").exists()
+
+
+def test_demo_uses_realised_returns_for_risk_metrics(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    csv_path = tmp_path / "pools.csv"
+    history_path = tmp_path / "history.csv"
+    outdir = tmp_path / "out"
+    _write_pools_csv(csv_path, ["PoolA", "PoolB"])
+    _write_history_csv(
+        history_path,
+        [
+            ("2024-01-01", "PoolA", 0.01),
+            ("2024-01-08", "PoolA", 0.02),
+            ("2024-01-01", "PoolB", 0.015),
+            ("2024-01-08", "PoolB", 0.01),
+        ],
+    )
+
+    captured: dict[str, pd.DataFrame] = {}
+
+    def fake_summary(df: pd.DataFrame) -> pd.DataFrame:
+        captured["summary"] = df.copy()
+        return pd.DataFrame({"PoolA": [0.1], "PoolB": [0.2]})
+
+    def fake_frontier(df: pd.DataFrame) -> pd.DataFrame:
+        captured["frontier"] = df.copy()
+        return pd.DataFrame({"PoolA": [0.6], "PoolB": [0.4]})
+
+    monkeypatch.setattr(risk_metrics, "summary_statistics", fake_summary)
+    monkeypatch.setattr(risk_metrics, "efficient_frontier", fake_frontier)
+    monkeypatch.setenv("STABLE_YIELD_CSV", str(csv_path))
+    monkeypatch.setenv("STABLE_YIELD_YIELDS_CSV", str(history_path))
+    monkeypatch.setenv("STABLE_YIELD_OUTDIR", str(outdir))
+    monkeypatch.setattr(sys, "argv", ["prog"])
+
+    stable_yield_demo.main()
+
+    assert "summary" in captured
+    assert "frontier" in captured
+    pd.testing.assert_frame_equal(captured["summary"], captured["frontier"])
+
+    expected_index = pd.to_datetime(["2024-01-01", "2024-01-08"], utc=True)
+    expected = pd.DataFrame(
+        {
+            "PoolA": [0.01, 0.02],
+            "PoolB": [0.015, 0.01],
+        },
+        index=expected_index,
+    )
+    expected.index.name = "timestamp"
+    expected.columns.name = "name"
+    actual = captured["summary"].sort_index().sort_index(axis=1)
+    expected = expected.sort_index().sort_index(axis=1)
+    pd.testing.assert_frame_equal(actual, expected)
+
+
+def test_demo_warns_when_history_missing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    csv_path = tmp_path / "pools.csv"
+    history_path = tmp_path / "history.csv"
+    outdir = tmp_path / "out"
+    _write_pools_csv(csv_path, ["PoolA"])
+    _write_history_csv(
+        history_path,
+        [
+            ("2024-01-01", "OtherPool", 0.01),
+            ("2024-01-08", "OtherPool", 0.02),
+        ],
+    )
+
+    def fail(_: pd.DataFrame) -> pd.DataFrame:  # pragma: no cover - ensure unused
+        raise AssertionError("risk metrics should not be called")
+
+    monkeypatch.setattr(risk_metrics, "summary_statistics", fail)
+    monkeypatch.setattr(risk_metrics, "efficient_frontier", fail)
+    monkeypatch.setenv("STABLE_YIELD_CSV", str(csv_path))
+    monkeypatch.setenv("STABLE_YIELD_YIELDS_CSV", str(history_path))
+    monkeypatch.setenv("STABLE_YIELD_OUTDIR", str(outdir))
+    monkeypatch.setattr(sys, "argv", ["prog"])
+
+    with pytest.warns(UserWarning, match="No historical returns matched the filtered pools"):
+        stable_yield_demo.main()
