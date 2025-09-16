@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import argparse
 import os
 import sys
 import tomllib
 from pathlib import Path
 from typing import Any, cast
+
+import pandas as pd
 
 from stable_yield_lab import (
     CSVSource,
@@ -16,6 +19,26 @@ from stable_yield_lab import (
     risk_metrics,
 )
 from stable_yield_lab.reporting import cross_section_report
+
+
+def parse_args(argv: list[str]) -> argparse.Namespace:
+    """Parse command-line arguments for the demo CLI."""
+
+    parser = argparse.ArgumentParser(description="Stable yield analytics demo")
+    parser.add_argument("config", nargs="?", help="Path to TOML configuration file")
+    parser.add_argument(
+        "--lookback-days",
+        type=int,
+        dest="lookback_days",
+        help="Lookback horizon in days for realised APY estimation.",
+    )
+    parser.add_argument(
+        "--min-observations",
+        type=int,
+        dest="min_observations",
+        help="Minimum history observations required for realised APY.",
+    )
+    return parser.parse_args(argv)
 
 
 def load_config(path: str | Path | None) -> dict[str, Any]:
@@ -45,7 +68,13 @@ def load_config(path: str | Path | None) -> dict[str, Any]:
             # "stablecoins": ["USDC"]
         },
         "output": {"outdir": None, "show": True, "charts": ["bar", "scatter", "chain"]},
-        "reporting": {"top_n": 10, "perf_fee_bps": 0.0, "mgmt_fee_bps": 0.0},
+        "reporting": {
+            "top_n": 10,
+            "perf_fee_bps": 0.0,
+            "mgmt_fee_bps": 0.0,
+            "realised_apy_lookback_days": 90,
+            "realised_apy_min_observations": 4,
+        },
     }
 
     cfg_path = Path(path) if path else None
@@ -76,7 +105,8 @@ def load_config(path: str | Path | None) -> dict[str, Any]:
 
 def main() -> None:
     """Run the demo using configuration from file or environment variables."""
-    cfg_file = os.getenv("STABLE_YIELD_CONFIG") or (sys.argv[1] if len(sys.argv) > 1 else None)
+    args = parse_args(sys.argv[1:])
+    cfg_file = os.getenv("STABLE_YIELD_CONFIG") or args.config
     cfg = load_config(cfg_file)
 
     if csv_env := os.getenv("STABLE_YIELD_CSV"):
@@ -90,6 +120,23 @@ def main() -> None:
             cfg["initial_investment"] = float(init_env)
         except ValueError:
             pass
+
+    report_cfg = cfg.setdefault("reporting", {})
+    if lookback_env := os.getenv("STABLE_YIELD_LOOKBACK_DAYS"):
+        try:
+            report_cfg["realised_apy_lookback_days"] = int(lookback_env)
+        except ValueError:
+            pass
+    if min_obs_env := os.getenv("STABLE_YIELD_MIN_OBSERVATIONS"):
+        try:
+            report_cfg["realised_apy_min_observations"] = int(min_obs_env)
+        except ValueError:
+            pass
+
+    if args.lookback_days is not None:
+        report_cfg["realised_apy_lookback_days"] = args.lookback_days
+    if args.min_observations is not None:
+        report_cfg["realised_apy_min_observations"] = args.min_observations
 
     # Load data
     csv_path = cfg["csv"]["path"]
@@ -114,6 +161,19 @@ def main() -> None:
     top_n = int(cfg.get("reporting", {}).get("top_n", 10))
     Metrics.top_n(filtered, n=top_n, key="base_apy")
 
+    lookback_cfg = report_cfg.get("realised_apy_lookback_days")
+    lookback_days = int(lookback_cfg) if lookback_cfg is not None else None
+    min_obs_cfg = report_cfg.get("realised_apy_min_observations", 1)
+    try:
+        min_obs = int(min_obs_cfg)
+    except (TypeError, ValueError):
+        min_obs = 1
+
+    returns_history = None
+    if cfg.get("yields_csv"):
+        hist_src = HistoricalCSVSource(str(cfg["yields_csv"]))
+        returns_history = Pipeline([hist_src]).run_history()
+
     # Outputs
     out = cfg.get("output", {})
     outdir = Path(out.get("outdir") or "") if out.get("outdir") else None
@@ -131,13 +191,23 @@ def main() -> None:
 
     if outdir:
         outdir.mkdir(parents=True, exist_ok=True)
-        cross_section_report(
+        report_paths = cross_section_report(
             filtered,
             outdir,
             perf_fee_bps=float(cfg.get("reporting", {}).get("perf_fee_bps", 0.0)),
             mgmt_fee_bps=float(cfg.get("reporting", {}).get("mgmt_fee_bps", 0.0)),
             top_n=top_n,
+            returns=returns_history,
+            realised_apy_lookback_days=lookback_days,
+            realised_apy_min_observations=min_obs,
         )
+        warnings_path = report_paths.get("warnings")
+        if warnings_path and warnings_path.is_file():
+            warnings_df = pd.read_csv(warnings_path)
+            if not warnings_df.empty:
+                print(
+                    f"[WARN] {len(warnings_df)} pools lack sufficient history. Details: {warnings_path}"
+                )
         if stats is not None:
             stats.to_csv(outdir / "risk_stats.csv")
         if frontier is not None:
@@ -167,12 +237,10 @@ def main() -> None:
         )
 
     # Performance trajectories from historical yields
-    if cfg.get("yields_csv"):
-        hist_src = HistoricalCSVSource(str(cfg["yields_csv"]))
-        returns_ts = Pipeline([hist_src]).run_history()
+    if returns_history is not None and not returns_history.empty:
         initial = float(cfg.get("initial_investment", 1.0))
-        nav_ts = performance.nav_trajectories(returns_ts, initial_investment=initial)
-        yield_ts = performance.yield_trajectories(returns_ts) * 100.0
+        nav_ts = performance.nav_trajectories(returns_history, initial_investment=initial)
+        yield_ts = performance.yield_trajectories(returns_history) * 100.0
         Visualizer.line_chart(
             yield_ts,
             title="Yield over time",

@@ -21,3 +21,5 @@ charts = ["bar", "scatter", "chain"]
 top_n = 10
 perf_fee_bps = 0.0
 mgmt_fee_bps = 0.0
+realised_apy_lookback_days = 90
+realised_apy_min_observations = 4

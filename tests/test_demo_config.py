@@ -6,3 +6,6 @@ def test_loads_config_file() -> None:
     assert cfg["csv"]["path"].endswith("sample_pools.csv")
     assert cfg["output"]["show"] is False
     assert cfg["output"]["charts"] == ["bar", "scatter", "chain"]
+    reporting = cfg["reporting"]
+    assert reporting["realised_apy_lookback_days"] == 90
+    assert reporting["realised_apy_min_observations"] == 4

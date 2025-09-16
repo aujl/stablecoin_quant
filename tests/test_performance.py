@@ -1,3 +1,4 @@
+import math
 from pathlib import Path
 
 import pandas as pd
@@ -89,3 +90,29 @@ def test_nav_series_defaults_and_empty() -> None:
     expected_returns = returns.mul(0.5, axis=1).sum(axis=1)
     expected_nav = (1.0 + expected_returns).cumprod()
     pd.testing.assert_series_equal(result, expected_nav)
+
+
+def test_estimate_realised_apy_thresholds() -> None:
+    csv_path = Path(__file__).resolve().parent.parent / "src" / "sample_yields.csv"
+    returns = Pipeline([HistoricalCSVSource(str(csv_path))]).run_history()
+
+    realised = performance.estimate_realised_apy(returns, lookback_days=30, min_observations=1)
+
+    pool_a = realised.loc["PoolA"]
+    pool_b = realised.loc["PoolB"]
+
+    assert pool_a["realised_apy_observations"] == 2
+    assert pool_a["realised_apy_warning"] == ""
+    expected_a = math.expm1((math.log1p(0.01) + math.log1p(0.011)) * 365.25 / 14.0)
+    assert pool_a["realised_apy"] == pytest.approx(expected_a, rel=1e-6)
+    assert pool_a["realised_apy_coverage_days"] == pytest.approx(14.0)
+
+    assert pool_b["realised_apy_observations"] == 2
+    assert pool_b["realised_apy_warning"] == ""
+    expected_b = math.expm1((math.log1p(0.008) + math.log1p(0.007)) * 365.25 / 28.0)
+    assert pool_b["realised_apy"] == pytest.approx(expected_b, rel=1e-6)
+    assert pool_b["realised_apy_coverage_days"] == pytest.approx(28.0)
+
+    warned = performance.estimate_realised_apy(returns, lookback_days=30, min_observations=3)
+    assert math.isnan(warned.loc["PoolA", "realised_apy"])
+    assert "Only 2 observations" in warned.loc["PoolA", "realised_apy_warning"]

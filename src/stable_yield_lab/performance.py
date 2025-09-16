@@ -8,6 +8,11 @@ compounding identity :math:`G_t = \prod_{i=1}^t (1 + r_i)`.
 
 from __future__ import annotations
 
+import math
+from dataclasses import dataclass
+from typing import Iterable
+
+import numpy as np
 import pandas as pd
 
 
@@ -158,3 +163,139 @@ def yield_trajectories(returns: pd.DataFrame) -> pd.DataFrame:
     if returns.empty:
         return returns.copy()
     return (1.0 + returns.fillna(0.0)).cumprod() - 1.0
+
+
+@dataclass
+class RealisedAPYResult:
+    """Container for realised APY analytics per asset."""
+
+    realised_apy: float
+    observations: int
+    window_start: pd.Timestamp | None
+    window_end: pd.Timestamp | None
+    coverage_days: float
+    warning: str
+
+
+def _coverage_in_days(index: Iterable[pd.Timestamp]) -> float:
+    timestamps = pd.Index(index).sort_values()
+    if timestamps.empty:
+        return float("nan")
+    if len(timestamps) == 1:
+        return float("nan")
+    span = (timestamps.max() - timestamps.min()).total_seconds() / 86400.0
+    avg_period = span / (len(timestamps) - 1)
+    return float(span + avg_period) if avg_period > 0 else float("nan")
+
+
+def estimate_realised_apy(
+    returns: pd.DataFrame,
+    *,
+    lookback_days: int | None = None,
+    min_observations: int = 4,
+) -> pd.DataFrame:
+    """Estimate realised APY per asset from periodic simple returns.
+
+    The function compounds observed returns within an optional lookback window
+    and annualises the cumulative growth using the realised time coverage.
+
+    Parameters
+    ----------
+    returns:
+        Wide DataFrame of periodic simple returns indexed by timestamp. Values
+        should be expressed as decimal fractions (``0.01`` for +1%).
+    lookback_days:
+        Optional trailing window size in days. When provided only observations
+        newer than ``now - lookback_days`` are considered.
+    min_observations:
+        Minimum non-missing observations required to produce an APY estimate.
+
+    Returns
+    -------
+    pandas.DataFrame
+        DataFrame indexed by asset name with columns:
+        ``realised_apy``, ``realised_apy_observations``,
+        ``realised_apy_window_start``, ``realised_apy_window_end``,
+        ``realised_apy_coverage_days`` and ``realised_apy_warning``.
+    """
+
+    if returns.empty:
+        return pd.DataFrame(
+            columns=
+            [
+                "realised_apy",
+                "realised_apy_observations",
+                "realised_apy_window_start",
+                "realised_apy_window_end",
+                "realised_apy_coverage_days",
+                "realised_apy_warning",
+            ]
+        )
+
+    if not isinstance(returns.index, pd.DatetimeIndex):
+        raise TypeError("returns index must be a DatetimeIndex")
+
+    window_end = returns.index.max()
+    if lookback_days is not None:
+        cutoff = window_end - pd.Timedelta(days=int(lookback_days))
+        windowed = returns.loc[returns.index >= cutoff]
+    else:
+        windowed = returns
+
+    results: list[RealisedAPYResult] = []
+    names: list[str] = []
+
+    for name, series in windowed.items():
+        clean = series.dropna()
+        observations = int(clean.shape[0])
+        warning = ""
+        realised = float("nan")
+        coverage_days = float("nan")
+        window_start: pd.Timestamp | None = None
+        window_end_col: pd.Timestamp | None = None
+
+        if observations == 0:
+            warning = "No observations within lookback window."
+        else:
+            window_start = pd.Timestamp(clean.index.min())
+            window_end_col = pd.Timestamp(clean.index.max())
+            if observations < int(min_observations):
+                warning = (
+                    f"Only {observations} observations (< {int(min_observations)})"
+                    " within lookback window."
+                )
+            elif observations == 1:
+                warning = "Only a single observation; cannot annualise returns."
+            else:
+                coverage_days = _coverage_in_days(clean.index)
+                if not math.isfinite(coverage_days) or coverage_days <= 0:
+                    warning = "Insufficient time coverage to annualise returns."
+                else:
+                    log_growth = float(np.log1p(clean).sum())
+                    annual_factor = 365.25 / coverage_days
+                    realised = math.expm1(log_growth * annual_factor)
+
+        results.append(
+            RealisedAPYResult(
+                realised_apy=realised,
+                observations=observations,
+                window_start=window_start,
+                window_end=window_end_col,
+                coverage_days=coverage_days,
+                warning=warning,
+            )
+        )
+        names.append(str(name))
+
+    df = pd.DataFrame(
+        {
+            "realised_apy": [r.realised_apy for r in results],
+            "realised_apy_observations": [r.observations for r in results],
+            "realised_apy_window_start": [r.window_start for r in results],
+            "realised_apy_window_end": [r.window_end for r in results],
+            "realised_apy_coverage_days": [r.coverage_days for r in results],
+            "realised_apy_warning": [r.warning for r in results],
+        },
+        index=names,
+    )
+    return df
