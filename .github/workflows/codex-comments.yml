@@ -6,40 +6,25 @@ on:
     types: [created]
 
 permissions:
-  issues: read
+  issues: write
 
 jobs:
   issue-resolution:
+    if: github.event.comment.user.login != 'github-actions[bot]'
     runs-on: ubuntu-latest
     steps:
-      - name: Check for Codex secrets
-        id: check-secrets
-        run: |
-          if [ -z "${{ secrets.CODEX_API_KEY }}" ] || [ -z "${{ secrets.CODEX_API_URL }}" ]; then
-            echo "Skipping Codex comment analysis: CODEX_API_KEY or CODEX_API_URL is not set."
-            echo "skip=true" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Send comment thread to Codex
-        if: steps.check-secrets.outputs.skip != 'true'
+      - name: Request Codex follow-up
         uses: actions/github-script@v7
-        env:
-          CODEX_API_URL: ${{ secrets.CODEX_API_URL }}
-          CODEX_API_KEY: ${{ secrets.CODEX_API_KEY }}
         with:
           script: |
-            const issue = context.payload.issue;
-            const comment = context.payload.comment;
-            const res = await fetch(`${process.env.CODEX_API_URL}/comments`, {
-              method: 'POST',
-              headers: {
-                'Content-Type': 'application/json',
-                'Authorization': `Bearer ${process.env.CODEX_API_KEY}`
-              },
-              body: JSON.stringify({
-                title: issue.title,
-                body: issue.body,
-                comment: comment.body
-              })
+            const body = [
+              '@codex please review the latest discussion.',
+              '',
+              'Summarize the thread, propose next actions, and flag owners who should respond.'
+            ].join('\n');
+
+            await github.rest.issues.createComment({
+              ...context.repo,
+              issue_number: context.issue.number,
+              body
             });
-            core.info(await res.text());

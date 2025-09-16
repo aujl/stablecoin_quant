@@ -32,7 +32,6 @@ poetry run pytest -q
 - The demo can plot NAV and cumulative yield trajectories when
   `initial_investment` and `yields_csv` are supplied via the config.
 - Override the demo config path with `STABLE_YIELD_CONFIG=/path/to/config.toml`
-- Export `CODEX_API_URL` and `CODEX_API_KEY` to experiment with Codex locally
 
 ## Investor Quickstart
 
@@ -49,15 +48,13 @@ For a step-by-step example, see [docs/investor_walkthrough.md](docs/investor_wal
 
 ## Codex Workflows
 
-GitHub workflows integrate with [Codex](https://github.com/features/copilot) for automated pull request
-reviews and issue analysis.
+GitHub workflows tag [@codex](https://github.com/features/copilot) to request automated pull request reviews,
+issue triage, and comment follow-ups—no external API credentials are required.
 
-- **Secrets**: `CODEX_API_URL` and `CODEX_API_KEY` must be set in repository secrets.
-- Workflows skip Codex steps if these secrets are unset.
 - **Triggers**:
-  - `pull_request` events (`opened`, `synchronize`, `reopened`) send the diff to Codex for review and tag `@codex` on the pull request.
-  - `issues` events (`opened`, `edited`) forward the issue content for analysis.
-  - `issue_comment` events (`created`) send the comment thread for resolution suggestions.
+  - `pull_request_target` events (`opened`, `synchronize`, `reopened`) post a single comment asking `@codex` to review for tests, security, and documentation.
+  - `issues` events (`opened`, `edited`) tag `@codex` for triage guidance and next steps.
+  - `issue_comment` events (`created`) notify `@codex` to summarize the thread and suggest owners/actions.
 
 
 ## Risk Scoring
