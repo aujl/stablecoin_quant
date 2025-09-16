@@ -6,6 +6,8 @@ import tomllib
 from pathlib import Path
 from typing import Any, cast
 
+import pandas as pd
+
 from stable_yield_lab import (
     CSVSource,
     HistoricalCSVSource,
@@ -13,6 +15,7 @@ from stable_yield_lab import (
     Pipeline,
     Visualizer,
     performance,
+    portfolio,
     risk_metrics,
 )
 from stable_yield_lab.reporting import cross_section_report
@@ -173,6 +176,39 @@ def main() -> None:
         initial = float(cfg.get("initial_investment", 1.0))
         nav_ts = performance.nav_trajectories(returns_ts, initial_investment=initial)
         yield_ts = performance.yield_trajectories(returns_ts) * 100.0
+
+        portfolio_metrics = None
+        portfolio_nav = None
+
+        if not returns_ts.empty and returns_ts.shape[1] > 0:
+            def _infer_periods_per_year(index: pd.Index) -> int:
+                if len(index) < 2:
+                    return 52
+                diffs = index.to_series().diff().dropna()
+                if diffs.empty:
+                    return 52
+                median_delta = diffs.median()
+                if median_delta == pd.Timedelta(0):
+                    return 52
+                periods = int(round(pd.Timedelta(days=365) / median_delta))
+                return max(periods, 1)
+
+            freq_guess = _infer_periods_per_year(returns_ts.index)
+            weights = pd.Series(1.0 / returns_ts.shape[1], index=returns_ts.columns)
+            portfolio_metrics, portfolio_nav = portfolio.apy_performance_summary(
+                returns_ts,
+                weights,
+                freq=freq_guess,
+                initial_nav=initial,
+            )
+
+            print("\nPortfolio APY summary:")
+            print(portfolio_metrics.to_frame(name="value"))
+
+            nav_ts = nav_ts.join(portfolio_nav.rename("Portfolio"), how="outer")
+        else:
+            print("\n[WARN] No historical returns available for portfolio aggregation.")
+
         Visualizer.line_chart(
             yield_ts,
             title="Yield over time",
@@ -187,6 +223,10 @@ def main() -> None:
             save_path=str(outdir / "nav_vs_time.png") if outdir else None,
             show=show,
         )
+
+        if outdir and portfolio_metrics is not None and portfolio_nav is not None:
+            portfolio_metrics.to_frame(name="value").to_csv(outdir / "portfolio_performance.csv")
+            portfolio_nav.to_frame(name="nav").to_csv(outdir / "portfolio_nav.csv")
 
 
 if __name__ == "__main__":
