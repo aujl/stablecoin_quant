@@ -22,7 +22,7 @@ import warnings
 import urllib.request
 import pandas as pd
 
-from . import performance, risk_scoring
+from . import performance, rebalance, risk_scoring
 from .performance import cumulative_return, nav_series
 
 
@@ -1197,6 +1197,88 @@ class Visualizer:
         plt.xticks([i + width / 2 for i in x], df["name"], rotation=45, ha="right")
         plt.ylabel("APY (%)")
         plt.title(title)
+        plt.tight_layout()
+        if save_path:
+            plt.savefig(save_path, bbox_inches="tight")
+        if show:
+            plt.show()
+
+    @staticmethod
+    def plot_weight_schedule(
+        weights: pd.DataFrame,
+        *,
+        title: str = "Portfolio weight schedule",
+        save_path: str | None = None,
+        show: bool = True,
+    ) -> None:
+        """Render a stacked-area chart of portfolio weights over time."""
+        if weights.empty:
+            return
+
+        clean = weights.fillna(0.0).sort_index()
+        if clean.shape[1] == 0:
+            return
+
+        plt = Visualizer._plt()
+        plt.figure(figsize=(10, 6))
+        x = clean.index
+        labels = [str(c) for c in clean.columns]
+        plt.stackplot(x, *clean.T.values, labels=labels, alpha=0.9)
+        plt.ylim(0.0, 1.0)
+        plt.ylabel("Portfolio weight")
+        plt.xlabel("Date")
+        plt.title(title)
+        plt.legend(loc="upper left", bbox_to_anchor=(1.02, 1.0))
+        plt.xticks(rotation=45, ha="right")
+        plt.tight_layout()
+        if save_path:
+            plt.savefig(save_path, bbox_inches="tight")
+        if show:
+            plt.show()
+
+    @staticmethod
+    def plot_turnover(
+        data: pd.DataFrame | pd.Series,
+        *,
+        turnover_col: str = "turnover",
+        fee_col: str | None = "fees",
+        title: str = "Turnover and fees",
+        save_path: str | None = None,
+        show: bool = True,
+    ) -> None:
+        """Plot a bar chart for turnover and optional fee series."""
+
+        df = data.to_frame(name=turnover_col) if isinstance(data, pd.Series) else data.copy()
+        if df.empty:
+            return
+        if turnover_col not in df.columns:
+            raise ValueError(f"Column '{turnover_col}' not found in turnover data")
+
+        turnover = df[turnover_col].fillna(0.0)
+        fees = df[fee_col].fillna(0.0) if fee_col and fee_col in df.columns else None
+
+        x_pos = list(range(len(turnover)))
+        labels = [
+            ts.strftime("%Y-%m-%d") if isinstance(ts, pd.Timestamp) else str(ts)
+            for ts in turnover.index
+        ]
+
+        plt = Visualizer._plt()
+        plt.figure(figsize=(10, 6))
+        width = 0.35 if fees is not None else 0.6
+
+        plt.bar(
+            [x - (width / 2 if fees is not None else 0.0) for x in x_pos],
+            turnover * 100.0,
+            width=width,
+            label="Turnover (%)",
+        )
+        if fees is not None:
+            plt.bar([x + width / 2 for x in x_pos], fees * 100.0, width=width, label="Fees (%)")
+
+        plt.xticks(x_pos, labels, rotation=45, ha="right")
+        plt.ylabel("Portfolio share (%)")
+        plt.title(title)
         plt.legend()
         plt.tight_layout()
         if save_path:
@@ -1262,4 +1344,5 @@ __all__ = [
     "portfolio",
     "risk_scoring",
     "performance",
+    "rebalance",
 ]

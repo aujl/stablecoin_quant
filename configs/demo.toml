@@ -26,6 +26,7 @@ history_charts = ["rolling_apy", "drawdowns", "realised_vs_target"]
 top_n = 10
 perf_fee_bps = 0.0
 mgmt_fee_bps = 0.0
+trading_cost_bps = 5.0
 
 [reporting.history]
 enabled = true
