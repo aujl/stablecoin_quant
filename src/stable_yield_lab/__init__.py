@@ -11,8 +11,7 @@ Design goals:
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Iterator
-from dataclasses import asdict, dataclass
+from collections.abc import Iterable
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Protocol
@@ -22,118 +21,14 @@ import urllib.request
 import pandas as pd
 
 from . import attribution, performance, risk_scoring
+from .core.models import Pool, PoolReturn
+from .core.repositories import PoolRepository, ReturnRepository
 from .performance import cumulative_return, nav_series
 
 
 # -----------------
 # Data Model
 # -----------------
-
-
-@dataclass(frozen=True)
-class Pool:
-    name: str
-    chain: str
-    stablecoin: str
-    tvl_usd: float
-    base_apy: float  # decimal fraction, e.g. 0.08 for 8%
-    reward_apy: float = 0.0  # optional extra rewards (auto-compounded by meta protocols)
-    is_auto: bool = True  # True if fully automated (no manual boosts/claims)
-    source: str = "custom"
-    risk_score: float = 2.0  # 1=low, 3=high (subjective / model-derived)
-    timestamp: float = 0.0  # unix epoch; 0 means unknown
-
-    def to_dict(self) -> dict[str, Any]:
-        d = asdict(self)
-        # for readability in CSV
-        d["timestamp_iso"] = (
-            datetime.fromtimestamp(self.timestamp or 0, tz=UTC).isoformat()
-            if self.timestamp
-            else ""
-        )
-        return d
-
-
-class PoolRepository:
-    """Lightweight in-memory collection with pandas export/import."""
-
-    def __init__(self, pools: Iterable[Pool] | None = None) -> None:
-        self._pools: list[Pool] = list(pools) if pools else []
-
-    def add(self, pool: Pool) -> None:
-        self._pools.append(pool)
-
-    def extend(self, items: Iterable[Pool]) -> None:
-        self._pools.extend(items)
-
-    def filter(
-        self,
-        *,
-        min_tvl: float = 0.0,
-        min_base_apy: float = 0.0,
-        chains: list[str] | None = None,
-        auto_only: bool = False,
-        stablecoins: list[str] | None = None,
-    ) -> PoolRepository:
-        res = []
-        for p in self._pools:
-            if p.tvl_usd < min_tvl:
-                continue
-            if p.base_apy < min_base_apy:
-                continue
-            if auto_only and not p.is_auto:
-                continue
-            if chains and p.chain not in chains:
-                continue
-            if stablecoins and p.stablecoin not in stablecoins:
-                continue
-            res.append(p)
-        return PoolRepository(res)
-
-    def to_dataframe(self) -> pd.DataFrame:
-        return pd.DataFrame([p.to_dict() for p in self._pools])
-
-    def __len__(self) -> int:
-        return len(self._pools)
-
-    def __iter__(self) -> Iterator[Pool]:
-        return iter(self._pools)
-
-
-# Additional data model for time-series returns
-
-
-@dataclass(frozen=True)
-class PoolReturn:
-    """Periodic return observation for a given pool."""
-
-    name: str
-    timestamp: pd.Timestamp
-    period_return: float
-
-    def to_dict(self) -> dict[str, Any]:
-        return {
-            "name": self.name,
-            "timestamp": self.timestamp,
-            "period_return": self.period_return,
-        }
-
-
-class ReturnRepository:
-    """Collection of :class:`PoolReturn` rows with pivot helper."""
-
-    def __init__(self, rows: Iterable[PoolReturn] | None = None) -> None:
-        self._rows: list[PoolReturn] = list(rows) if rows else []
-
-    def extend(self, rows: Iterable[PoolReturn]) -> None:
-        self._rows.extend(rows)
-
-    def to_timeseries(self) -> pd.DataFrame:
-        if not self._rows:
-            return pd.DataFrame()
-        df = pd.DataFrame([r.to_dict() for r in self._rows])
-        df["timestamp"] = pd.to_datetime(df["timestamp"], utc=True)
-        return df.pivot(index="timestamp", columns="name", values="period_return").sort_index()
 
 
 # -----------------

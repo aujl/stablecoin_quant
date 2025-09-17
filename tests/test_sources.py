@@ -4,8 +4,8 @@ from stable_yield_lab import (
     BeefySource,
     DefiLlamaSource,
     MorphoSource,
-    PoolRepository,
 )
+from stable_yield_lab.core.repositories import PoolRepository
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
 

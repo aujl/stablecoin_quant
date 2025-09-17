@@ -1,4 +1,6 @@
-from stable_yield_lab import Metrics, Pool, PoolRepository
+from stable_yield_lab import Metrics
+from stable_yield_lab.core.models import Pool
+from stable_yield_lab.core.repositories import PoolRepository
 
 
 def test_net_apy() -> None:

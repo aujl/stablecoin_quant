@@ -5,7 +5,9 @@ import math
 import pandas as pd
 import pytest
 
-from stable_yield_lab import Pool, PoolRepository, attribution
+from stable_yield_lab import attribution
+from stable_yield_lab.core.models import Pool
+from stable_yield_lab.core.repositories import PoolRepository
 from stable_yield_lab.reporting import cross_section_report
 
 
