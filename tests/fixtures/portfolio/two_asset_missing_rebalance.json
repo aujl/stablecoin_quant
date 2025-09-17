@@ -1,0 +1,13 @@
+{
+  "description": "Attempted rebalance into an asset without return history, expected to fail because the weights collapse to zero after alignment.",
+  "initial_nav": 1.0,
+  "returns": [
+    {"date": "2024-02-05", "AssetA": 0.01, "AssetB": 0.02},
+    {"date": "2024-02-12", "AssetA": -0.015, "AssetB": 0.005},
+    {"date": "2024-02-19", "AssetA": 0.0, "AssetB": 0.0}
+  ],
+  "schedule": [
+    {"date": "2024-02-05", "weights": {"AssetA": 0.5, "AssetB": 0.5}},
+    {"date": "2024-02-19", "weights": {"MissingAsset": 1.0}}
+  ]
+}
