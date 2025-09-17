@@ -4,7 +4,8 @@ from pathlib import Path
 
 import pandas as pd
 
-from . import Metrics, PoolRepository
+from . import Metrics
+from .core.repositories import PoolRepository
 
 _RISK_COLUMNS = [
     "sharpe_ratio",
