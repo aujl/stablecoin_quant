@@ -1,3 +1,4 @@
+from collections.abc import Callable
 from pathlib import Path
 import json
 
@@ -12,6 +13,19 @@ from stable_yield_lab import (
     nav_series,
     performance,
 )
+
+
+@pytest.fixture
+def load_history() -> Callable[[str], pd.DataFrame]:
+    """Load historical returns from the fixtures directory."""
+
+    base_dir = Path(__file__).resolve().parent / "fixtures"
+
+    def _loader(filename: str) -> pd.DataFrame:
+        src = HistoricalCSVSource(str(base_dir / filename))
+        return Pipeline([src]).run_history()
+
+    return _loader
 
 def test_nav_and_yield_trajectories(tmp_path: Path) -> None:
     csv_path = Path(__file__).resolve().parent.parent / "src" / "sample_yields.csv"
@@ -184,3 +198,93 @@ def test_sample_history_matches_expected_metrics() -> None:
                 assert row[key] == pytest.approx(value, rel=1e-6, abs=1e-6)
             else:
                 assert row[key] == value
+@pytest.mark.parametrize(
+    ("fixture_name", "return_sequences", "constant_checks", "metadata"),
+    [
+        pytest.param(
+            "returns_irregular.csv",
+            {
+                "PoolIrregularA": [0.010, 0.015, -0.005],
+                "PoolIrregularB": [0.020, 0.010],
+            },
+            [],
+            {"check_irregular_spacing": True},
+            id="irregular-sampling",
+        ),
+        pytest.param(
+            "returns_gaps.csv",
+            {
+                "PoolGapA": [0.010, 0.020, 0.0, 0.0],
+                "PoolGapB": [0.015, 0.0, -0.005, 0.0],
+            },
+            [
+                (
+                    pd.Timestamp("2024-02-07T00:00:00Z"),
+                    "PoolGapA",
+                    (1.0 + 0.010) * (1.0 + 0.020) - 1.0,
+                ),
+                (
+                    pd.Timestamp("2024-02-04T00:00:00Z"),
+                    "PoolGapB",
+                    (1.0 + 0.015) - 1.0,
+                ),
+            ],
+            {},
+            id="gap-filling",
+        ),
+        pytest.param(
+            "returns_negative.csv",
+            {
+                "PoolNeg": [0.020, -0.030, 0.010],
+                "PoolFlat": [0.0, 0.0, -0.020],
+            },
+            [],
+            {"expected_negative": {"PoolNeg", "PoolFlat"}},
+            id="negative-returns",
+        ),
+    ],
+)
+def test_yield_trajectories_handle_messy_sampling(
+    load_history: Callable[[str], pd.DataFrame],
+    fixture_name: str,
+    return_sequences: dict[str, list[float]],
+    constant_checks: list[tuple[pd.Timestamp, str, float]],
+    metadata: dict[str, object],
+) -> None:
+    returns = load_history(fixture_name)
+
+    assert not returns.empty
+    assert returns.index.tz is not None
+    assert returns.index.is_monotonic_increasing
+
+    if metadata.get("check_irregular_spacing"):
+        diffs = returns.index.to_series().diff().dropna().unique()
+        assert len(diffs) > 1
+
+    yields = performance.yield_trajectories(returns)
+    navs = performance.nav_trajectories(returns, initial_investment=100.0)
+
+    assert yields.index.equals(returns.index)
+    assert navs.index.equals(returns.index)
+
+    for pool, sequence in return_sequences.items():
+        growth = 1.0
+        for r in sequence:
+            growth *= 1.0 + float(r)
+        expected_final = growth - 1.0
+
+        final_yield = yields.iloc[-1][pool]
+        final_nav = navs.iloc[-1][pool]
+
+        assert final_yield == pytest.approx(expected_final, rel=1e-9)
+        assert final_nav == pytest.approx(100.0 * (1.0 + expected_final), rel=1e-9)
+
+    for timestamp, pool, expected_yield in constant_checks:
+        assert yields.loc[timestamp, pool] == pytest.approx(expected_yield, rel=1e-9)
+        assert navs.loc[timestamp, pool] == pytest.approx(
+            100.0 * (1.0 + expected_yield), rel=1e-9
+        )
+
+    for pool in metadata.get("expected_negative", set()):
+        assert yields.iloc[-1][pool] < 0.0
+        assert navs.iloc[-1][pool] < 100.0

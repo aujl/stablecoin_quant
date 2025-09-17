@@ -1,0 +1,26 @@
+{
+  "description": "Five weekly observations for a two-asset portfolio rebalance from 70/30 to 0/100 with missing returns treated as flat performance.",
+  "initial_nav": 1.0,
+  "returns": [
+    {"date": "2024-01-01", "AssetA": 0.01, "AssetB": 0.005},
+    {"date": "2024-01-08", "AssetA": 0.015, "AssetB": null},
+    {"date": "2024-01-15", "AssetA": -0.02, "AssetB": 0.012},
+    {"date": "2024-01-22", "AssetA": null, "AssetB": 0.01},
+    {"date": "2024-01-29", "AssetA": 0.0, "AssetB": -0.005}
+  ],
+  "schedule": [
+    {"date": "2024-01-01", "weights": {"AssetA": 0.7, "AssetB": 0.3}},
+    {"date": "2024-01-22", "weights": {"AssetA": 0.0, "AssetB": 1.0}}
+  ],
+  "expected_nav": [
+    {"date": "2024-01-01", "nav": 1.0085},
+    {"date": "2024-01-08", "nav": 1.01908925},
+    {"date": "2024-01-15", "nav": 1.0084907218},
+    {"date": "2024-01-22", "nav": 1.018575629018},
+    {"date": "2024-01-29", "nav": 1.0134827508729098}
+  ],
+  "expected_apy": {
+    "2024-01-01": 0.22919179921493785,
+    "2024-01-22": 0.13864364655315664
+  }
+}
