@@ -8,9 +8,9 @@ compounding identity :math:`G_t = \prod_{i=1}^t (1 + r_i)`.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
-from numbers import Integral
-from typing import Literal
+from dataclasses import dataclass
+from math import sqrt
+from typing import Iterable, Mapping
 
 import pandas as pd
 
@@ -46,6 +46,9 @@ def nav_series(
     returns: pd.DataFrame,
     weights: pd.Series | None = None,
     initial: float = 1.0,
+    *,
+    rebalance_cost_bps: float = 0.0,
+    rebalance_fixed_fee: float = 0.0,
 ) -> pd.Series:
     r"""Generate a portfolio net asset value (NAV) path from asset returns.
 
@@ -73,6 +76,11 @@ def nav_series(
     initial:
         Starting NAV value. Units are preserved in the output.
 
+    rebalance_cost_bps:
+        Basis-point trading cost applied to the traded notional each period.
+    rebalance_fixed_fee:
+        Fixed fee applied whenever the portfolio trades (after costs in bps).
+
     Returns
     -------
     pandas.Series
@@ -97,9 +105,32 @@ def nav_series(
     norm_weights = weights / total
 
     clean_returns = returns.fillna(0.0)
-    portfolio_ret = clean_returns.mul(norm_weights, axis=1).sum(axis=1)
-    compounded = cumulative_return(portfolio_ret)
-    return float(initial) * (1.0 + compounded)
+    nav_value = float(initial)
+    nav_path: list[float] = []
+    cost_rate = float(rebalance_cost_bps) / 10_000.0
+    fixed_fee = float(rebalance_fixed_fee)
+
+    for _, row in clean_returns.iterrows():
+        holdings = nav_value * norm_weights
+        holdings_after = holdings * (1.0 + row)
+        nav_before_rebalance = float(holdings_after.sum())
+
+        if nav_before_rebalance <= 0.0:
+            nav_value = 0.0
+            nav_path.append(nav_value)
+            continue
+
+        weights_after = holdings_after / nav_before_rebalance
+        turnover = 0.5 * float((weights_after - norm_weights).abs().sum())
+        cost = 0.0
+        if turnover > 1e-12:
+            cost += nav_before_rebalance * turnover * cost_rate
+            cost += fixed_fee
+
+        nav_value = max(nav_before_rebalance - cost, 0.0)
+        nav_path.append(nav_value)
+
+    return pd.Series(nav_path, index=clean_returns.index, dtype=float)
 
 
 def nav_trajectories(returns: pd.DataFrame, *, initial_investment: float) -> pd.DataFrame:
@@ -164,144 +195,221 @@ def yield_trajectories(returns: pd.DataFrame) -> pd.DataFrame:
     return (1.0 + returns.fillna(0.0)).cumprod() - 1.0
 
 
-def horizon_apys(
-    trajectory: pd.DataFrame | pd.Series,
+@dataclass(frozen=True)
+class RebalanceScenario:
+    """Parameters describing a portfolio rebalance experiment."""
+
+    calendar: Iterable[pd.Timestamp] | pd.DatetimeIndex
+    cost_bps: float = 0.0
+
+
+@dataclass(frozen=True)
+class ScenarioRunResult:
+    """Container for aggregated scenario metrics and paths."""
+
+    metrics: pd.DataFrame
+    navs: pd.DataFrame
+    returns: pd.DataFrame
+
+
+@dataclass(frozen=True)
+class _ScenarioPath:
+    nav: pd.Series
+    returns: pd.Series
+    total_cost: float
+
+
+def _normalise_weights(weights: pd.Series, columns: pd.Index) -> pd.Series:
+    aligned = weights.reindex(columns).fillna(0.0)
+    total = float(aligned.sum())
+    if total == 0.0:
+        raise ValueError("weights sum to zero after alignment with returns")
+    return aligned / total
+
+
+def _prepare_calendar(
+    calendar: Iterable[pd.Timestamp] | pd.DatetimeIndex | None,
+    index: pd.DatetimeIndex,
+) -> pd.DatetimeIndex:
+    if calendar is None:
+        return pd.DatetimeIndex([], tz=index.tz)
+    if isinstance(calendar, pd.DatetimeIndex):
+        cal = calendar
+    else:
+        cal = pd.DatetimeIndex(pd.to_datetime(list(calendar)))
+    if index.tz is not None:
+        if cal.tz is None:
+            cal = cal.tz_localize(index.tz)
+        else:
+            cal = cal.tz_convert(index.tz)
+    else:
+        if cal.tz is not None:
+            cal = cal.tz_convert(None)
+    return cal.intersection(index)
+
+
+def _infer_periods_per_year(index: pd.DatetimeIndex) -> float:
+    if len(index) < 2:
+        return 1.0
+    diffs = index.to_series().diff().dropna()
+    if diffs.empty:
+        return 1.0
+    avg_days = diffs.dt.total_seconds().mean() / 86_400.0
+    if avg_days <= 0:
+        return float(len(index))
+    return 365.25 / avg_days
+
+
+def _simulate_rebalanced_portfolio(
+    returns: pd.DataFrame,
+    weights: pd.Series,
+    scenario: RebalanceScenario,
     *,
-    lookbacks: Mapping[str, int | str | pd.Timedelta],
-    value_type: Literal["nav", "yield"] = "nav",
-    periods_per_year: float | None = None,
-) -> pd.DataFrame:
-    r"""Convert NAV or cumulative yield paths into annualised realised APYs.
+    initial_nav: float,
+) -> _ScenarioPath:
+    if returns.empty:
+        empty = pd.Series(dtype=float, index=returns.index)
+        return _ScenarioPath(nav=empty, returns=empty, total_cost=0.0)
 
-    For a lookback window of length :math:`L` (in years) the realised annual
-    percentage yield (APY) is computed from the growth factor :math:`G`
-    observed over the window:
+    clean_returns = returns.fillna(0.0)
+    weights = _normalise_weights(weights, clean_returns.columns)
+    calendar = _prepare_calendar(scenario.calendar, clean_returns.index)
+    rebalance_mask = pd.Series(clean_returns.index.isin(calendar), index=clean_returns.index)
 
-    .. math::
-       \text{APY} = G^{1/L} - 1, \qquad G = \frac{\text{NAV}_{t}}{\text{NAV}_{t-L}}.
+    nav = float(initial_nav)
+    holdings = weights * nav
+    nav_path: list[float] = []
+    period_returns: list[float] = []
+    total_cost = 0.0
+    cost_rate = float(scenario.cost_bps) / 10_000.0
 
-    The function accepts NAV trajectories (level data) or cumulative yields. In
-    the latter case the input is first converted into NAV space via
-    ``1 + cumulative_yield`` so that growth factors remain comparable across
-    pools regardless of the initial capital. Lookbacks may be provided either
-    as positive integers (number of periods) or as pandas-compatible
-    ``Timedelta`` specifications such as ``"52W"`` or ``"90D"``.
+    for timestamp, row in clean_returns.iterrows():
+        nav_before = nav
+        holdings = holdings * (1.0 + row)
+        nav = float(holdings.sum())
+
+        if rebalance_mask.loc[timestamp]:
+            if nav > 0.0:
+                current_weights = holdings / nav
+                diff = weights - current_weights
+                traded_value = float(diff.abs().sum()) * nav
+            else:
+                traded_value = 0.0
+            cost = traded_value * cost_rate
+            if cost:
+                nav -= cost
+                total_cost += cost
+            holdings = weights * nav
+
+        period_return = (nav - nav_before) / nav_before if nav_before != 0 else 0.0
+        nav_path.append(nav)
+        period_returns.append(period_return)
+
+    nav_series = pd.Series(nav_path, index=clean_returns.index, name="nav")
+    returns_series = pd.Series(period_returns, index=clean_returns.index, name="return")
+    return _ScenarioPath(nav=nav_series, returns=returns_series, total_cost=total_cost)
+
+
+def run_rebalance_scenarios(
+    returns: pd.DataFrame,
+    weights: pd.Series,
+    scenarios: Mapping[str, RebalanceScenario],
+    *,
+    benchmark: str | None = None,
+    initial_nav: float = 1.0,
+) -> ScenarioRunResult:
+    """Evaluate portfolio performance under alternative rebalance calendars.
 
     Parameters
     ----------
-    trajectory:
-        NAV levels or cumulative yields indexed by time with one column per
-        asset.
-    lookbacks:
-        Mapping of human-readable labels to lookback definitions. Integer
-        values are interpreted as a number of observation periods; strings and
-        :class:`~pandas.Timedelta` objects are converted via
-        :func:`pandas.to_timedelta`.
-    value_type:
-        ``"nav"`` when ``trajectory`` already represents NAV levels, or
-        ``"yield"`` when the input is cumulative yield (``G - 1``).
-    periods_per_year:
-        Optional frequency override used when lookbacks are specified in
-        integer periods and cannot be inferred from the index. If omitted the
-        function attempts to infer the observation frequency from a
-        ``DatetimeIndex``.
+    returns:
+        Wide DataFrame of periodic simple returns with datetime index.
+    weights:
+        Target portfolio weights aligned with ``returns`` columns.
+    scenarios:
+        Mapping of scenario name to calendar/cost assumptions.
+    benchmark:
+        Scenario name used as reference for tracking error. When ``None`` the
+        benchmark is a frictionless strategy that rebalances every period.
+    initial_nav:
+        Starting portfolio value.
 
     Returns
     -------
-    pandas.DataFrame
-        Realised APYs expressed as decimal fractions. The rows correspond to
-        asset names (trajectory columns) and columns align with the provided
-        ``lookbacks`` labels.
-
-    Raises
-    ------
-    ValueError
-        If an integer lookback is provided without a resolvable
-        ``periods_per_year`` and the index frequency cannot be inferred, or if
-        any lookback definition is non-positive.
-    TypeError
-        When a time-based lookback is requested but the index is not a
-        ``DatetimeIndex``.
+    ScenarioRunResult
+        Object containing per-scenario metrics plus NAV/return trajectories.
     """
 
-    if isinstance(trajectory, pd.Series):
-        name = trajectory.name or "value"
-        data = trajectory.astype(float).to_frame(name=name)
+    if returns.empty:
+        empty = pd.DataFrame(index=returns.index)
+        return ScenarioRunResult(
+            metrics=pd.DataFrame(columns=["realized_apy", "total_cost", "tracking_error", "terminal_nav"]),
+            navs=empty,
+            returns=empty,
+        )
+
+    if not scenarios:
+        raise ValueError("at least one scenario must be provided")
+
+    paths: dict[str, _ScenarioPath] = {}
+    for name, scenario in scenarios.items():
+        paths[name] = _simulate_rebalanced_portfolio(
+            returns,
+            weights,
+            scenario,
+            initial_nav=initial_nav,
+        )
+
+    if benchmark is not None:
+        if benchmark not in paths:
+            raise KeyError(f"benchmark '{benchmark}' not found in scenarios")
+        benchmark_returns = paths[benchmark].returns
     else:
-        data = trajectory.astype(float)
+        benchmark_path = _simulate_rebalanced_portfolio(
+            returns,
+            weights,
+            RebalanceScenario(calendar=returns.index, cost_bps=0.0),
+            initial_nav=initial_nav,
+        )
+        benchmark_returns = benchmark_path.returns
 
-    if data.empty:
-        return pd.DataFrame(index=data.columns, columns=list(lookbacks.keys()), dtype=float)
+    benchmark_returns = benchmark_returns.reindex(returns.index, fill_value=0.0)
+    periods_per_year = _infer_periods_per_year(returns.index)
 
-    if not lookbacks:
-        return pd.DataFrame(index=data.columns, dtype=float)
+    metrics_rows: list[dict[str, float | str]] = []
+    nav_data: dict[str, pd.Series] = {}
+    return_data: dict[str, pd.Series] = {}
 
-    nav = data.sort_index()
-    nav = nav.astype(float)
+    for name, path in paths.items():
+        nav_series = path.nav.reindex(returns.index, fill_value=float("nan"))
+        return_series = path.returns.reindex(returns.index, fill_value=0.0)
+        nav_data[name] = nav_series
+        return_data[name] = return_series
 
-    value_type = value_type.lower()
-    if value_type == "yield":
-        nav = 1.0 + nav
-    elif value_type != "nav":
-        raise ValueError(f"Unsupported value_type '{value_type}'. Use 'nav' or 'yield'.")
-
-    idx = nav.index
-    period_length: pd.Timedelta | None = None
-    if isinstance(idx, pd.DatetimeIndex) and len(idx) >= 2:
-        diffs = idx.to_series().diff().dropna()
-        if not diffs.empty:
-            median = diffs.median()
-            if pd.notna(median) and median > pd.Timedelta(0):
-                period_length = pd.Timedelta(median)
-
-    per_year = float(periods_per_year) if periods_per_year is not None else None
-    if per_year is None and period_length is not None:
-        per_year = float(pd.Timedelta(days=365) / period_length)
-
-    assets = list(nav.columns)
-    result = pd.DataFrame(index=assets, columns=list(lookbacks.keys()), dtype=float)
-    latest = nav.iloc[-1]
-
-    year_td = pd.Timedelta(days=365)
-
-    for label, raw_lookback in lookbacks.items():
-        if isinstance(raw_lookback, Integral):
-            periods = int(raw_lookback)
-            if periods <= 0:
-                raise ValueError(f"Lookback '{label}' must be positive; received {periods}.")
-            if len(nav) <= periods:
-                continue
-            base = nav.iloc[-(periods + 1)]
-            if per_year is None:
-                raise ValueError(
-                    "periods_per_year must be provided or inferrable when using integer lookbacks"
-                )
-            years = periods / per_year
+        total_periods = len(return_series)
+        total_growth = nav_series.iloc[-1] / initial_nav if total_periods else float("nan")
+        if total_periods and total_growth > 0.0:
+            realized_apy = total_growth ** (periods_per_year / total_periods) - 1.0
         else:
-            try:
-                delta = pd.to_timedelta(raw_lookback)
-            except (TypeError, ValueError) as exc:
-                raise ValueError(f"Invalid lookback '{label}': {raw_lookback!r}") from exc
-            if delta <= pd.Timedelta(0):
-                raise ValueError(f"Lookback '{label}' must be positive; received {raw_lookback!r}.")
-            if not isinstance(idx, pd.DatetimeIndex):
-                raise TypeError("Timedelta lookbacks require a DatetimeIndex.")
-            target = idx[-1] - delta
-            window = nav.loc[:target]
-            if window.empty:
-                continue
-            base = window.iloc[-1]
-            years = float(delta / year_td)
+            realized_apy = float("nan")
 
-        if years <= 0:
-            continue
+        diff = (return_series - benchmark_returns).fillna(0.0)
+        if len(diff) > 1:
+            tracking_error = float(diff.std(ddof=0) * sqrt(periods_per_year))
+        else:
+            tracking_error = 0.0
 
-        growth = latest / base
-        valid = (base > 0) & (latest > 0) & growth.notna() & (growth > 0)
-        apy_series = pd.Series(float("nan"), index=assets)
-        if valid.any():
-            exponent = 1.0 / years
-            apy_series.loc[valid] = growth.loc[valid].pow(exponent) - 1.0
-        result[label] = apy_series
+        metrics_rows.append(
+            {
+                "scenario": name,
+                "realized_apy": float(realized_apy),
+                "total_cost": float(path.total_cost),
+                "tracking_error": tracking_error,
+                "terminal_nav": float(nav_series.iloc[-1]),
+            }
+        )
 
-    return result
+    metrics = pd.DataFrame(metrics_rows).set_index("scenario")
+    navs = pd.DataFrame(nav_data)
+    returns_df = pd.DataFrame(return_data)
+    return ScenarioRunResult(metrics=metrics, navs=navs, returns=returns_df)

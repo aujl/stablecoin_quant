@@ -15,14 +15,13 @@ from collections.abc import Iterable, Iterator
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Callable, Mapping, Protocol, Literal, cast
+from typing import Any, Protocol
 import json
 import logging
-import warnings
 import urllib.request
 import pandas as pd
 
-from . import performance, rebalance, risk_scoring
+from . import attribution, performance, risk_scoring
 from .performance import cumulative_return, nav_series
 
 
@@ -47,7 +46,11 @@ class Pool:
     def to_dict(self) -> dict[str, Any]:
         d = asdict(self)
         # for readability in CSV
-        d["timestamp_iso"] = datetime.fromtimestamp(self.timestamp or 0, tz=UTC).isoformat() if self.timestamp else ""
+        d["timestamp_iso"] = (
+            datetime.fromtimestamp(self.timestamp or 0, tz=UTC).isoformat()
+            if self.timestamp
+            else ""
+        )
         return d
 
 
@@ -133,30 +136,6 @@ class ReturnRepository:
         return df.pivot(index="timestamp", columns="name", values="period_return").sort_index()
 
 
-class DataQualityWarning(UserWarning):
-    """Warning raised when historical data required gap-filling."""
-
-
-class DataQualityError(RuntimeError):
-    """Raised when historical data does not meet minimum quality thresholds."""
-
-
-@dataclass(frozen=True)
-class MissingDataDiagnostics:
-    """Summary statistics for the gap-filling applied to a pool's history."""
-
-    name: str
-    start: pd.Timestamp
-    end: pd.Timestamp
-    expected_periods: int
-    observed_periods: int
-    missing_periods: int
-    filled_periods: int
-    remaining_missing: int
-    fill_strategy: str
-    frequency: str | None
-
-
 # -----------------
 # Data Sources API
 # -----------------
@@ -196,308 +175,11 @@ class CSVSource:
         return pools
 
 
-class SchemaAwareCSVSource(CSVSource):
-    """CSV loader with schema validation, frequency inference and refresh hooks."""
-
-    DEFAULT_SCHEMA: Mapping[str, Any] = {
-        "name": str,
-        "chain": str,
-        "stablecoin": str,
-        "tvl_usd": float,
-        "base_apy": float,
-        "reward_apy": float,
-        "is_auto": bool,
-        "source": str,
-        "risk_score": float,
-        "timestamp": float,
-    }
-
-    def __init__(
-        self,
-        path: str | Path,
-        schema: Mapping[str, Any] | None = None,
-        *,
-        validation: ValidationLevel = "warn",
-        expected_frequency: str | None = None,
-        frequency_column: str = "timestamp",
-        auto_refresh: bool = False,
-        refresh_callback: Callable[[Path], None] | None = None,
-    ) -> None:
-        super().__init__(str(path))
-        self.path_obj = Path(path)
-        base_schema = dict(self.DEFAULT_SCHEMA)
-        if schema:
-            base_schema.update(schema)
-        self.schema = base_schema
-        level = str(validation).lower()
-        if level not in {"none", "warn", "strict"}:
-            raise ValueError(f"Unknown validation level: {validation}")
-        self.validation: ValidationLevel = cast(ValidationLevel, level)
-        self.expected_frequency = expected_frequency or None
-        self.frequency_column = frequency_column
-        self.auto_refresh = bool(auto_refresh)
-        self.refresh_callback = refresh_callback
-        self.detected_frequency: str | None = None
-
-    def fetch(self) -> list[Pool]:
-        self._maybe_refresh()
-        df = pd.read_csv(self.path_obj)
-        self._validate_columns(df)
-        for column, expected in self.schema.items():
-            if column in df.columns:
-                self._convert_column(df, column, expected)
-
-        self.detected_frequency = None
-        if self.frequency_column in df.columns:
-            freq = self._infer_frequency(df[self.frequency_column])
-            self.detected_frequency = freq
-            if self.expected_frequency:
-                if freq is None:
-                    self._handle_validation_issue(
-                        (
-                            f"Unable to infer frequency for column '{self.frequency_column}' "
-                            f"(expected {self.expected_frequency})."
-                        )
-                    )
-                elif freq != self.expected_frequency:
-                    self._handle_validation_issue(
-                        (
-                            f"Detected frequency '{freq}' does not match expected "
-                            f"'{self.expected_frequency}'."
-                        )
-                    )
-
-        now = datetime.now(tz=UTC).timestamp()
-        pools: list[Pool] = []
-        for _, row in df.iterrows():
-            pools.append(
-                Pool(
-                    name=self._as_str(row.get("name"), ""),
-                    chain=self._as_str(row.get("chain"), ""),
-                    stablecoin=self._as_str(row.get("stablecoin"), ""),
-                    tvl_usd=self._as_float(row.get("tvl_usd"), 0.0),
-                    base_apy=self._as_float(row.get("base_apy"), 0.0),
-                    reward_apy=self._as_float(row.get("reward_apy"), 0.0),
-                    is_auto=self._as_bool(row.get("is_auto"), True),
-                    source=self._as_str(row.get("source"), "csv"),
-                    risk_score=self._as_float(row.get("risk_score"), 2.0),
-                    timestamp=self._timestamp_from_value(row.get("timestamp"), now),
-                )
-            )
-        return pools
-
-    def _maybe_refresh(self) -> None:
-        if not (self.auto_refresh and self.refresh_callback):
-            return
-        try:
-            self.refresh_callback(self.path_obj)
-        except Exception as exc:
-            message = f"Refresh callback failed for {self.path_obj}: {exc}"
-            if self.validation == "strict":
-                raise RuntimeError(message) from exc
-            logger.warning(message)
-
-    def _validate_columns(self, df: pd.DataFrame) -> None:
-        missing = [col for col in self.schema if col not in df.columns]
-        if missing:
-            self._handle_validation_issue(
-                f"CSV missing expected columns: {', '.join(missing)}"
-            )
-            for col in missing:
-                if col not in df.columns:
-                    df[col] = pd.NA
-
-    def _convert_column(self, df: pd.DataFrame, column: str, expected: Any) -> None:
-        series = df[column]
-        if expected in {float, int}:
-            converted = pd.to_numeric(series, errors="coerce")
-            invalid_mask = converted.isna() & ~series.isna()
-            if invalid_mask.any():
-                self._handle_validation_issue(
-                    f"Column '{column}' contains non-numeric values; coerced to NaN."
-                )
-            if expected is int:
-                converted = converted.round().astype("Int64")
-            df[column] = converted
-            return
-        if expected is bool:
-            converted_values: list[bool] = []
-            had_errors = False
-            for value in series:
-                try:
-                    converted_values.append(self._convert_bool(value))
-                except ValueError:
-                    had_errors = True
-                    converted_values.append(True)
-            if had_errors:
-                self._handle_validation_issue(
-                    f"Column '{column}' contains invalid booleans; defaulting to True."
-                )
-            df[column] = pd.Series(converted_values, dtype=bool)
-            return
-        if expected is str:
-            df[column] = series.astype(str)
-            return
-        if callable(expected):
-            try:
-                df[column] = series.apply(expected)
-            except Exception as exc:
-                self._handle_validation_issue(
-                    f"Failed to apply converter for column '{column}': {exc}", exc
-                )
-            return
-
-    def _infer_frequency(self, series: pd.Series) -> str | None:
-        if series.empty:
-            return None
-        if pd.api.types.is_datetime64_any_dtype(series):
-            dt_series = series.dropna()
-        elif pd.api.types.is_numeric_dtype(series):
-            dt_series = pd.to_datetime(series, unit="s", utc=True, errors="coerce").dropna()
-        else:
-            dt_series = pd.to_datetime(series, utc=True, errors="coerce").dropna()
-        if dt_series.empty:
-            return None
-        index = pd.DatetimeIndex(dt_series.sort_values().unique())
-        if len(index) < 3:
-            return None
-        try:
-            freq = pd.infer_freq(index)
-        except (TypeError, ValueError):
-            return None
-        if freq is None:
-            return None
-        try:
-            alias = pd.tseries.frequencies.to_offset(freq).freqstr
-        except ValueError:
-            alias = freq
-        return cast(str | None, alias)
-
-    def _handle_validation_issue(self, message: str, exc: Exception | None = None) -> None:
-        if self.validation == "strict":
-            raise ValueError(message) from exc
-        if self.validation == "warn":
-            logger.warning(message)
-
-    @staticmethod
-    def _convert_bool(value: Any) -> bool:
-        if isinstance(value, bool):
-            return value
-        if pd.isna(value):
-            raise ValueError("Boolean value is missing")
-        if isinstance(value, (int, float)):
-            return bool(int(value))
-        if isinstance(value, str):
-            val = value.strip().lower()
-            if val in {"true", "1", "yes", "y", "t"}:
-                return True
-            if val in {"false", "0", "no", "n", "f"}:
-                return False
-        raise ValueError(f"Cannot interpret boolean value {value!r}")
-
-    @staticmethod
-    def _as_str(value: Any, default: str) -> str:
-        if pd.isna(value):
-            return default
-        return str(value)
-
-    @staticmethod
-    def _as_float(value: Any, default: float) -> float:
-        if pd.isna(value):
-            return float(default)
-        try:
-            return float(value)
-        except (TypeError, ValueError):
-            return float(default)
-
-    def _as_bool(self, value: Any, default: bool) -> bool:
-        if pd.isna(value):
-            return default
-        if isinstance(value, bool):
-            return value
-        if isinstance(value, (int, float)):
-            return bool(int(value))
-        if isinstance(value, str):
-            val = value.strip().lower()
-            if val in {"true", "1", "yes", "y", "t"}:
-                return True
-            if val in {"false", "0", "no", "n", "f"}:
-                return False
-        return default
-
-    def _timestamp_from_value(self, value: Any, default: float) -> float:
-        if pd.isna(value):
-            return default
-        if isinstance(value, pd.Timestamp):
-            return value.to_pydatetime().timestamp()
-        if isinstance(value, datetime):
-            dt = value if value.tzinfo else value.replace(tzinfo=UTC)
-            return dt.timestamp()
-        try:
-            return float(value)
-        except (TypeError, ValueError):
-            parsed = pd.to_datetime(value, utc=True, errors="coerce")
-            if pd.isna(parsed):
-                self._handle_validation_issue(
-                    f"Unable to parse timestamp value {value!r}; using fallback."
-                )
-                return default
-            return parsed.to_pydatetime().timestamp()
-
-FillStrategy = Literal["none", "ffill", "bfill", "ffill_bfill", "zero", "ffill_zero"]
-
-
 class HistoricalCSVSource:
-    """Load periodic returns and normalise them to a desired sampling frequency.
+    """Load periodic returns from a CSV with timestamp, name and period_return."""
 
-    The source consolidates multiple protocol histories into a single, regularised
-    panel by applying the following steps:
-
-    1. read the CSV input (``timestamp``, ``name``, ``period_return`` columns),
-    2. pivot to a wide DataFrame keyed by timestamp and protocol name,
-    3. resample to ``target_frequency`` to ensure consistent spacing,
-    4. fill gaps according to ``fill_strategy`` (forward/back fill or zeros), and
-    5. record diagnostics about missing periods and applied imputations.
-
-    ``period_return`` is assumed to be the return realised over the resampled
-    interval (e.g. weekly APY converted to per-period return). The class does not
-    attempt to annualise or otherwise transform the supplied values; it only
-    normalises the time axis.
-    """
-
-    def __init__(
-        self,
-        path: str,
-        *,
-        target_frequency: str | None = "W-MON",
-        fill_strategy: FillStrategy = "ffill_bfill",
-        min_observations: int = 1,
-    ) -> None:
-        if min_observations < 0:
-            raise ValueError("min_observations must be non-negative")
+    def __init__(self, path: str) -> None:
         self.path = path
-        self.target_frequency = target_frequency
-        self.fill_strategy = fill_strategy
-        self.min_observations = min_observations
-        self.last_diagnostics: dict[str, MissingDataDiagnostics] = {}
-
-    def _apply_fill(self, series: pd.Series) -> pd.Series:
-        """Return a copy of ``series`` with missing values imputed."""
-
-        strategy = self.fill_strategy
-        if strategy == "none":
-            return series.copy()
-        if strategy == "ffill":
-            return series.ffill()
-        if strategy == "bfill":
-            return series.bfill()
-        if strategy == "ffill_bfill":
-            return series.ffill().bfill()
-        if strategy == "zero":
-            return series.fillna(0.0)
-        if strategy == "ffill_zero":
-            return series.ffill().fillna(0.0)
-        raise ValueError(f"Unsupported fill_strategy: {strategy}")
 
     def fetch(self) -> list[PoolReturn]:
         df = pd.read_csv(self.path)
@@ -505,111 +187,19 @@ class HistoricalCSVSource:
         missing = required.difference(df.columns)
         if missing:
             raise ValueError(f"CSV missing columns: {missing}")
-
-        df["timestamp"] = pd.to_datetime(df["timestamp"], utc=True, errors="coerce")
-        if df["timestamp"].isna().any():
-            raise ValueError("CSV contains invalid timestamps")
-        df["name"] = df["name"].astype(str)
-        df["period_return"] = pd.to_numeric(df["period_return"], errors="coerce")
-        df = df.sort_values(["timestamp", "name"])
-
-        pivot = df.pivot_table(
-            index="timestamp",
-            columns="name",
-            values="period_return",
-            aggfunc="last",
-        ).sort_index()
-        if pivot.empty:
-            self.last_diagnostics = {}
-            return []
-
-        if self.target_frequency:
-            pivot = pivot.resample(self.target_frequency).mean()
-
-        diagnostics: dict[str, MissingDataDiagnostics] = {}
-        filled_df = pd.DataFrame(index=pivot.index)
-        filled_df.index.name = "timestamp"
-        warning_payload: list[tuple[str, int, int, int]] = []
-        freq = self.target_frequency
-
-        for name in pivot.columns:
-            series = pivot[name].astype(float)
-            expected = int(len(series))
-            if expected == 0:
-                diagnostics[name] = MissingDataDiagnostics(
-                    name=name,
-                    start=pd.NaT,
-                    end=pd.NaT,
-                    expected_periods=0,
-                    observed_periods=0,
-                    missing_periods=0,
-                    filled_periods=0,
-                    remaining_missing=0,
-                    fill_strategy=self.fill_strategy,
-                    frequency=freq,
-                )
-                filled_df[name] = series
-                continue
-
-            observed = int(series.notna().sum())
-            if observed < self.min_observations:
-                raise DataQualityError(
-                    f"Pool {name} has {observed} observation(s); minimum required is {self.min_observations}"
-                )
-
-            filled_series = self._apply_fill(series)
-            missing_periods = expected - observed
-            remaining_missing = int(filled_series.isna().sum())
-            filled_periods = missing_periods - remaining_missing
-
-            diagnostics[name] = MissingDataDiagnostics(
-                name=name,
-                start=series.index.min(),
-                end=series.index.max(),
-                expected_periods=expected,
-                observed_periods=observed,
-                missing_periods=missing_periods,
-                filled_periods=filled_periods,
-                remaining_missing=remaining_missing,
-                fill_strategy=self.fill_strategy,
-                frequency=freq,
+        df["timestamp"] = pd.to_datetime(df["timestamp"], utc=True)
+        rows = [
+            PoolReturn(
+                name=str(r["name"]),
+                timestamp=pd.Timestamp(r["timestamp"]),
+                period_return=float(r["period_return"]),
             )
-
-            filled_df[name] = filled_series
-            if missing_periods > 0:
-                warning_payload.append((name, missing_periods, filled_periods, remaining_missing))
-
-        self.last_diagnostics = diagnostics
-
-        for name, missing_periods, filled_periods, remaining_missing in warning_payload:
-            warnings.warn(
-                (
-                    f"Pool {name} missing {missing_periods} period(s); "
-                    f"filled {filled_periods} using {self.fill_strategy}; "
-                    f"remaining missing {remaining_missing}"
-                ),
-                DataQualityWarning,
-                stacklevel=2,
-            )
-
-        melted = filled_df.reset_index().melt(id_vars="timestamp", var_name="name", value_name="period_return")
-        rows: list[PoolReturn] = []
-        for _, row in melted.iterrows():
-            value = row["period_return"]
-            period_return = float(value) if pd.notna(value) else float("nan")
-            rows.append(
-                PoolReturn(
-                    name=str(row["name"]),
-                    timestamp=pd.Timestamp(row["timestamp"]),
-                    period_return=period_return,
-                )
-            )
+            for _, r in df.iterrows()
+        ]
         return rows
 
 
 logger = logging.getLogger(__name__)
-
-ValidationLevel = Literal["none", "warn", "strict"]
 
 STABLE_TOKENS = {
     "USDC",
@@ -796,7 +386,9 @@ class BeefySource:
             if v.get("status") != "active":
                 continue
             assets = v.get("assets") or []
-            if not assets or not all(a.upper() in STABLE_TOKENS or "USD" in a.upper() for a in assets):
+            if not assets or not all(
+                a.upper() in STABLE_TOKENS or "USD" in a.upper() for a in assets
+            ):
                 continue
             chain = str(v.get("chain", ""))
             chain_id = self.CHAIN_IDS.get(chain.lower(), chain)
@@ -854,7 +446,8 @@ class Metrics:
                 apr_avg=("base_apy", "mean"),
                 apr_wavg=(
                     "base_apy",
-                    lambda x: (x * df.loc[x.index, "tvl_usd"]).sum() / df.loc[x.index, "tvl_usd"].sum(),
+                    lambda x: (x * df.loc[x.index, "tvl_usd"]).sum()
+                    / df.loc[x.index, "tvl_usd"].sum(),
                 ),
             )
             .reset_index()
@@ -882,7 +475,8 @@ class Metrics:
         """
         gross = float(base_apy) + float(reward_apy)
         fee_frac = (perf_fee_bps + mgmt_fee_bps) / 10_000.0
-        return max(gross * (1.0 - fee_frac), -1.0)
+        net_growth = (1.0 + gross) * (1.0 - fee_frac) - 1.0
+        return max(net_growth, -1.0)
 
     @staticmethod
     def add_net_apy_column(
@@ -943,7 +537,9 @@ class Visualizer:
         try:
             import matplotlib.pyplot as plt
         except Exception as exc:  # pragma: no cover
-            raise RuntimeError("matplotlib is required for visualization. Install via Poetry or pip.") from exc
+            raise RuntimeError(
+                "matplotlib is required for visualization. Install via Poetry or pip."
+            ) from exc
         return plt
 
     @staticmethod
@@ -1112,6 +708,64 @@ class Visualizer:
             plt.show()
 
     @staticmethod
+    def nav_with_benchmarks(
+        returns: pd.DataFrame,
+        *,
+        initial_investment: float = 1.0,
+        cash_returns: float | pd.Series = 0.0,
+        labels: dict[str, str] | None = None,
+        save_path: str | None = None,
+        show: bool = True,
+    ) -> pd.DataFrame:
+        """Plot NAV overlays for rebalanced, buy-and-hold, and cash benchmarks."""
+
+        if returns.empty:
+            return pd.DataFrame()
+
+        label_map = labels.copy() if labels else {}
+        label_map.setdefault("rebalance", "Rebalanced")
+        label_map.setdefault("buy_and_hold", "Buy & Hold")
+        label_map.setdefault("cash", "Cash")
+
+        weights = pd.Series(1.0 / returns.shape[1], index=returns.columns)
+        rebalance_nav = performance.nav_series(returns, weights, initial=float(initial_investment))
+
+        clean_returns = returns.fillna(0.0)
+        growth = (1.0 + clean_returns).cumprod()
+        buy_hold_nav = growth.mul(weights * float(initial_investment), axis=1).sum(axis=1)
+
+        if isinstance(cash_returns, pd.Series):
+            cash_series = cash_returns.reindex(returns.index).fillna(0.0)
+        else:
+            cash_series = pd.Series(float(cash_returns), index=returns.index, dtype=float)
+        cash_growth = (1.0 + cash_series).cumprod()
+        cash_nav = float(initial_investment) * cash_growth
+
+        nav_df = pd.DataFrame(
+            {
+                label_map["rebalance"]: rebalance_nav,
+                label_map["buy_and_hold"]: buy_hold_nav,
+                label_map["cash"]: cash_nav,
+            }
+        )
+
+        plt = Visualizer._plt()
+        plt.figure(figsize=(10, 6))
+        for column in nav_df.columns:
+            plt.plot(nav_df.index, nav_df[column], label=column)
+        plt.xlabel("Date")
+        plt.ylabel("NAV")
+        plt.title("NAV Benchmarks")
+        plt.legend()
+        plt.tight_layout()
+        if save_path:
+            plt.savefig(save_path, bbox_inches="tight")
+        if show:
+            plt.show()
+
+        return nav_df
+
+    @staticmethod
     def bar_group_chain(
         df_group: pd.DataFrame,
         title: str = "APY (Kettenvergleich)",
@@ -1174,118 +828,6 @@ class Visualizer:
         if show:
             plt.show()
 
-    @staticmethod
-    def bar_realised_vs_target(
-        df: pd.DataFrame,
-        *,
-        title: str = "Realised vs target APY",
-        save_path: str | None = None,
-        show: bool = True,
-    ) -> None:
-        """Plot realised vs target APY as grouped bars in percentage space."""
-        if df.empty:
-            return
-        required = {"name", "realised_apy", "target_apy"}
-        if not required.issubset(df.columns):
-            raise ValueError("DataFrame must contain name, realised_apy and target_apy columns")
-        plt = Visualizer._plt()
-        plt.figure(figsize=(10, 6))
-        x = range(len(df))
-        width = 0.35
-        plt.bar(x, df["target_apy"] * 100.0, width=width, label="Target")
-        plt.bar([i + width for i in x], df["realised_apy"] * 100.0, width=width, label="Realised")
-        plt.xticks([i + width / 2 for i in x], df["name"], rotation=45, ha="right")
-        plt.ylabel("APY (%)")
-        plt.title(title)
-        plt.tight_layout()
-        if save_path:
-            plt.savefig(save_path, bbox_inches="tight")
-        if show:
-            plt.show()
-
-    @staticmethod
-    def plot_weight_schedule(
-        weights: pd.DataFrame,
-        *,
-        title: str = "Portfolio weight schedule",
-        save_path: str | None = None,
-        show: bool = True,
-    ) -> None:
-        """Render a stacked-area chart of portfolio weights over time."""
-        if weights.empty:
-            return
-
-        clean = weights.fillna(0.0).sort_index()
-        if clean.shape[1] == 0:
-            return
-
-        plt = Visualizer._plt()
-        plt.figure(figsize=(10, 6))
-        x = clean.index
-        labels = [str(c) for c in clean.columns]
-        plt.stackplot(x, *clean.T.values, labels=labels, alpha=0.9)
-        plt.ylim(0.0, 1.0)
-        plt.ylabel("Portfolio weight")
-        plt.xlabel("Date")
-        plt.title(title)
-        plt.legend(loc="upper left", bbox_to_anchor=(1.02, 1.0))
-        plt.xticks(rotation=45, ha="right")
-        plt.tight_layout()
-        if save_path:
-            plt.savefig(save_path, bbox_inches="tight")
-        if show:
-            plt.show()
-
-    @staticmethod
-    def plot_turnover(
-        data: pd.DataFrame | pd.Series,
-        *,
-        turnover_col: str = "turnover",
-        fee_col: str | None = "fees",
-        title: str = "Turnover and fees",
-        save_path: str | None = None,
-        show: bool = True,
-    ) -> None:
-        """Plot a bar chart for turnover and optional fee series."""
-
-        df = data.to_frame(name=turnover_col) if isinstance(data, pd.Series) else data.copy()
-        if df.empty:
-            return
-        if turnover_col not in df.columns:
-            raise ValueError(f"Column '{turnover_col}' not found in turnover data")
-
-        turnover = df[turnover_col].fillna(0.0)
-        fees = df[fee_col].fillna(0.0) if fee_col and fee_col in df.columns else None
-
-        x_pos = list(range(len(turnover)))
-        labels = [
-            ts.strftime("%Y-%m-%d") if isinstance(ts, pd.Timestamp) else str(ts)
-            for ts in turnover.index
-        ]
-
-        plt = Visualizer._plt()
-        plt.figure(figsize=(10, 6))
-        width = 0.35 if fees is not None else 0.6
-
-        plt.bar(
-            [x - (width / 2 if fees is not None else 0.0) for x in x_pos],
-            turnover * 100.0,
-            width=width,
-            label="Turnover (%)",
-        )
-        if fees is not None:
-            plt.bar([x + width / 2 for x in x_pos], fees * 100.0, width=width, label="Fees (%)")
-
-        plt.xticks(x_pos, labels, rotation=45, ha="right")
-        plt.ylabel("Portfolio share (%)")
-        plt.title(title)
-        plt.legend()
-        plt.tight_layout()
-        if save_path:
-            plt.savefig(save_path, bbox_inches="tight")
-        if show:
-            plt.show()
-
 
 # -----------------
 # Pipeline
@@ -1325,9 +867,6 @@ __all__ = [
     "PoolRepository",
     "PoolReturn",
     "ReturnRepository",
-    "MissingDataDiagnostics",
-    "DataQualityWarning",
-    "DataQualityError",
     "DataSource",
     "CSVSource",
     "HistoricalCSVSource",
@@ -1344,5 +883,5 @@ __all__ = [
     "portfolio",
     "risk_scoring",
     "performance",
-    "rebalance",
+    "attribution",
 ]

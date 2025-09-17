@@ -4,10 +4,6 @@ yields_csv = "src/sample_yields.csv"
 
 [csv]
 path = "src/sample_pools.csv"
-validation = "warn"
-expected_frequency = ""
-auto_refresh = false
-refresh_url = ""
 
 [filters]
 min_tvl = 100000
@@ -20,20 +16,33 @@ stablecoins = []
 outdir = "docs"
 show = false
 charts = ["bar", "scatter", "chain"]
-history_charts = ["rolling_apy", "drawdowns", "realised_vs_target"]
 
 [reporting]
 top_n = 10
 perf_fee_bps = 0.0
 mgmt_fee_bps = 0.0
-trading_cost_bps = 5.0
 
-[reporting.history]
-enabled = true
-rolling_windows = [4, 12]
-periods_per_year = 52
-target_field = "net_apy"
+[benchmarks]
+tickers = ["PoolA", "PoolB"]
+cash_rate = 0.0
 
-[reporting.realised_apy_lookbacks]
-"last 2 weeks" = "14D"
-"last 52 weeks" = "52W"
+[benchmarks.labels]
+rebalance = "Rebalanced"
+buy_and_hold = "Buy & Hold"
+cash = "Cash (0%)"
+
+[rebalance]
+benchmark = "weekly"
+selected = ["daily", "weekly", "monthly"]
+
+[rebalance.scenarios.daily]
+cadence = "1D"
+cost_bps = 0.0
+
+[rebalance.scenarios.weekly]
+cadence = "1W"
+cost_bps = 1.5
+
+[rebalance.scenarios.monthly]
+cadence = "1M"
+cost_bps = 3.0

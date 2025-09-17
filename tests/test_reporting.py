@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import math
+import statistics
 from pathlib import Path
 
 import pandas as pd
@@ -9,121 +11,115 @@ from stable_yield_lab import Pool, PoolRepository
 from stable_yield_lab.reporting import cross_section_report
 
 
-@pytest.mark.parametrize("with_returns", [False, True])
-@pytest.mark.parametrize("with_horizon", [False, True])
-def test_cross_section_report_history_outputs(
-    tmp_path: Path, with_returns: bool, with_horizon: bool
-) -> None:
+def _expected_metrics(values: list[float]) -> dict[str, float]:
+    mean = sum(values) / len(values)
+    std = statistics.stdev(values)
+    sharpe = mean / std if std > 0 else math.nan
+    downside = [v for v in values if v < 0]
+    if downside:
+        downside_std = math.sqrt(sum(v * v for v in downside) / len(downside))
+        sortino = mean / downside_std if downside_std > 0 else math.nan
+    else:
+        sortino = math.nan
+    cumulative = 1.0
+    max_nav = 1.0
+    max_dd = 0.0
+    for r in values:
+        cumulative *= 1 + r
+        if cumulative > max_nav:
+            max_nav = cumulative
+        drawdown = cumulative / max_nav - 1
+        if drawdown < max_dd:
+            max_dd = drawdown
+    negative_share = sum(1 for v in values if v < 0) / len(values)
+    return {
+        "sharpe_ratio": sharpe,
+        "sortino_ratio": sortino,
+        "max_drawdown": max_dd,
+        "negative_period_share": negative_share,
+    }
+
+
+def test_cross_section_report_adds_risk_metrics(tmp_path: Path) -> None:
     repo = PoolRepository(
         [
             Pool(
                 name="PoolA",
                 chain="Ethereum",
                 stablecoin="USDC",
-                tvl_usd=1_000_000,
-                base_apy=0.03,
-                timestamp=1_700_000_000,
+                tvl_usd=100.0,
+                base_apy=0.1,
             ),
             Pool(
                 name="PoolB",
-                chain="Ethereum",
-                stablecoin="DAI",
-                tvl_usd=500_000,
-                base_apy=0.02,
-                timestamp=1_700_000_000,
+                chain="Polygon",
+                stablecoin="USDT",
+                tvl_usd=300.0,
+                base_apy=0.08,
             ),
         ]
     )
 
+    index = pd.date_range("2024-01-01", periods=3, freq="D", tz="UTC")
     returns = pd.DataFrame(
         {
-            "PoolA": [0.01, 0.02, 0.015],
-            "PoolB": [0.005, -0.002, 0.01],
+            "PoolA": [0.1, -0.05, 0.0],
+            "PoolB": [0.02, 0.03, -0.01],
         },
-        index=pd.to_datetime(["2024-01-01", "2024-01-08", "2024-01-15"], utc=True),
+        index=index,
     )
 
-    horizon = None
-    if with_horizon:
-        horizon = pd.DataFrame(
-            {"Realised APY (custom)": [0.05, 0.04]}, index=["PoolA", "PoolB"]
-        )
+    paths = cross_section_report(repo, tmp_path, returns=returns)
+    conc = pd.read_csv(paths["concentration"])
+    result = conc.set_index("scope")
 
-    paths = cross_section_report(
-        repo,
-        tmp_path,
-        perf_fee_bps=0.0,
-        mgmt_fee_bps=0.0,
-        top_n=2,
-        horizon_apys=horizon,
-        returns=returns if with_returns else None,
-        rolling_windows=(2,),
-        periods_per_year=2,
-    )
+    expected_total_returns = [
+        0.25 * 0.1 + 0.75 * 0.02,
+        0.25 * -0.05 + 0.75 * 0.03,
+        0.25 * 0.0 + 0.75 * -0.01,
+    ]
 
-    base_keys = {"pools", "by_chain", "by_source", "by_stablecoin", "topN", "concentration"}
-    assert base_keys.issubset(paths)
+    expected_total = _expected_metrics(expected_total_returns)
+    total_row = result.loc["total"]
+    for key, value in expected_total.items():
+        assert total_row[key] == pytest.approx(value, rel=1e-6, abs=1e-6)
 
-    pools_df = pd.read_csv(paths["pools"])
-    if with_horizon:
-        assert "Realised APY (custom)" in pools_df.columns
-    else:
-        assert "Realised APY (custom)" not in pools_df.columns
+    pool_a_row = result.loc["pool:PoolA"]
+    expected_pool_a = _expected_metrics([0.1, -0.05, 0.0])
+    for key, value in expected_pool_a.items():
+        assert pool_a_row[key] == pytest.approx(value, rel=1e-6, abs=1e-6)
+    assert math.isnan(pool_a_row["hhi"])
 
-    if not with_returns:
-        assert {"rolling_apy", "drawdowns", "drawdown_summary", "realised_vs_target"}.isdisjoint(paths)
-        return
+    chain_row = result.loc["chain:Ethereum"]
+    for key, value in expected_pool_a.items():
+        assert chain_row[key] == pytest.approx(value, rel=1e-6, abs=1e-6)
 
-    # Rolling APY CSV
-    rolling_df = pd.read_csv(paths["rolling_apy"], parse_dates=["timestamp"])
-    assert sorted(rolling_df["window"].unique()) == [2]
-    mask = (
-        (rolling_df["name"] == "PoolA")
-        & (rolling_df["window"] == 2)
-        & (rolling_df["timestamp"] == pd.Timestamp("2024-01-08", tz="UTC"))
-    )
-    value = float(rolling_df.loc[mask, "rolling_apy"].iloc[0])
-    expected_pool_a = ((1 + 0.01) * (1 + 0.02)) ** (2 / 2) - 1
-    assert value == pytest.approx(expected_pool_a)
-
-    # Drawdown time-series and summary
-    drawdowns = pd.read_csv(paths["drawdowns"], parse_dates=["timestamp"])
-    pool_b_dd = drawdowns[
-        (drawdowns["name"] == "PoolB") & (drawdowns["timestamp"] == pd.Timestamp("2024-01-08", tz="UTC"))
-    ]["drawdown"].iloc[0]
-    expected_drawdown = (1 + 0.005) * (1 - 0.002) / (1 + 0.005) - 1
-    assert pool_b_dd == pytest.approx(expected_drawdown)
-
-    summary = pd.read_csv(paths["drawdown_summary"])
-    pool_b_summary = summary[summary["name"] == "PoolB"].iloc[0]
-    assert pool_b_summary["max_drawdown"] == pytest.approx(expected_drawdown)
-
-    # Realised vs target APY comparison
-    realised = pd.read_csv(paths["realised_vs_target"])
-    pool_a_realised = realised[realised["name"] == "PoolA"].iloc[0]
-    growth = (1 + returns["PoolA"]).prod()
-    realised_expected = growth ** (2 / returns["PoolA"].count()) - 1
-    assert pool_a_realised["realised_apy"] == pytest.approx(realised_expected)
-    assert pool_a_realised["target_apy"] == pytest.approx(0.03)
-    assert pool_a_realised["realised_minus_target"] == pytest.approx(
-        realised_expected - 0.03
-    )
+    assert result.loc["total", "hhi"] == pytest.approx(0.625)
+    assert result.loc["chain:Ethereum", "hhi"] == pytest.approx(1.0)
+    assert result.loc["stablecoin:USDC", "hhi"] == pytest.approx(1.0)
 
 
-def test_cross_section_report_requires_datetime_returns(tmp_path: Path) -> None:
+def test_cross_section_report_without_returns(tmp_path: Path) -> None:
     repo = PoolRepository(
         [
             Pool(
-                name="PoolA",
+                name="Solo",
                 chain="Ethereum",
                 stablecoin="USDC",
-                tvl_usd=1_000_000,
-                base_apy=0.03,
+                tvl_usd=1_000.0,
+                base_apy=0.05,
             )
         ]
     )
 
-    returns = pd.DataFrame({"PoolA": [0.01, 0.02]}, index=[0, 1])
+    paths = cross_section_report(repo, tmp_path)
+    conc = pd.read_csv(paths["concentration"])
 
-    with pytest.raises(ValueError, match="returns must be indexed by timestamps"):
-        cross_section_report(repo, tmp_path, returns=returns)
+    metrics_cols = {
+        "sharpe_ratio",
+        "sortino_ratio",
+        "max_drawdown",
+        "negative_period_share",
+    }
+    assert metrics_cols.issubset(conc.columns)
+    assert conc[list(metrics_cols)].isna().all().all()

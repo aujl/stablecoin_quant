@@ -1,11 +1,4 @@
-name,chain,stablecoin,tvl_usd,base_apy,reward_apy,is_auto,source,risk_score,timestamp,history_start,history_end,observations,realized_return_52w,realized_apy_52w,realized_volatility_52w,max_drawdown_52w,last_period_return
-Morpho USDC (ETH),Ethereum,USDC,220000000,0.1,0.0,True,Morpho,2.0,1757079803,2023-07-16,2024-07-07,52.0,0.117477,0.117477,0.012712,-0.01,0.003164
-Aave USDT v3 (Polygon),Polygon,USDT,35000000,0.065,0.0,True,Aave,2.0,1757079803,2023-07-16,2024-07-07,52.0,0.086133,0.086133,0.011028,-0.009,0.002433
-Beefy: Curve DOLA-sUSDe (ETH),Ethereum,USD (mix),18000000,0.14,0.0,True,Convex/Beefy,2.5,1757079803,,,,,,,,
-Curve agEUR/EUROC (ETH),Ethereum,EUR (mix),5500000,0.072,0.0,True,Curve,2.2,1757079803,,,,,,,,
-Venus USDC (BSC),BSC,USDC,17000000,0.11,0.02,True,Venus,2.5,1757079803,,,,,,,,
-Overnight USD+ (Polygon),Polygon,USD+,42000000,0.095,0.0,True,Overnight,1.8,1757079803,,,,,,,,
-Lybra eUSD (ETH),Ethereum,eUSD,380000000,0.075,0.0,True,Lybra,2.0,1757079803,,,,,,,,
-Curve 3Pool Convex (ETH),Ethereum,USD (mix),750000000,0.065,0.0,True,Convex,2.0,1757079803,2023-07-16,2024-07-07,52.0,0.059392,0.059392,0.023207,-0.02287,0.002438
-JustLend USDD (TRON),Tron,USDD,260000000,0.12,0.0,True,JustLend,3.0,1757079803,,,,,,,,
-Aave agEUR (Gnosis),Gnosis,agEUR,6200000,0.022,0.0,True,Aave,1.8,1757079803,,,,,,,,
+name,chain,stablecoin,tvl_usd,base_apy,reward_apy,is_auto,source,risk_score,timestamp
+PoolA,Ethereum,USDC,1000000,0.08,0.01,True,synthetic,2.0,1700000000
+PoolB,Ethereum,USDT,500000,0.07,0.005,True,synthetic,2.0,1700000000
+PoolC,Polygon,USDC,750000,0.065,0.0,True,synthetic,2.5,1700000000
