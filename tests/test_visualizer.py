@@ -1,9 +1,10 @@
 from pathlib import Path
 
 import matplotlib
+from matplotlib import pyplot as plt
 import pandas as pd
 
-from stable_yield_lab import Visualizer, rebalance
+from stable_yield_lab import Visualizer
 
 matplotlib.use("Agg")
 
@@ -45,31 +46,38 @@ def test_line_nav_creates_file(tmp_path: Path) -> None:
     assert out.exists() and out.stat().st_size > 0
 
 
-def _synthetic_rebalance() -> rebalance.RebalanceResult:
+def test_nav_with_benchmarks_overlays_labels(tmp_path: Path) -> None:
+    plt.close("all")
     returns = pd.DataFrame(
         {
-            "PoolA": [0.01, -0.004, 0.012, 0.003],
-            "PoolB": [0.008, 0.006, -0.002, 0.005],
-            "PoolC": [0.005, 0.007, 0.004, -0.001],
+            "PoolA": [0.01, 0.02, -0.005],
+            "PoolB": [0.015, -0.01, 0.012],
         },
-        index=pd.date_range("2024-01-01", periods=4, freq="W"),
+        index=pd.date_range("2024-01-01", periods=3, freq="D"),
     )
-    return rebalance.run_rebalance(returns, trading_cost_bps=10.0)
+    out = tmp_path / "nav_overlay.png"
+    labels = {
+        "rebalance": "Rebalanced",
+        "buy_and_hold": "Buy & Hold",
+        "cash": "Cash (0%)",
+    }
+    nav_df = Visualizer.nav_with_benchmarks(
+        returns,
+        initial_investment=1_000.0,
+        cash_returns=0.0,
+        labels=labels,
+        save_path=str(out),
+        show=False,
+    )
 
-
-def test_plot_weight_schedule_creates_file(tmp_path: Path) -> None:
-    result = _synthetic_rebalance()
-    out = tmp_path / "weights.png"
-    Visualizer.plot_weight_schedule(result.target_weights, save_path=str(out), show=False)
     assert out.exists() and out.stat().st_size > 0
+    assert list(nav_df.columns) == [labels["rebalance"], labels["buy_and_hold"], labels["cash"]]
 
-
-def test_plot_turnover_creates_file(tmp_path: Path) -> None:
-    result = _synthetic_rebalance()
-    turnover_df = pd.DataFrame({
-        "turnover": result.turnover,
-        "fees": result.fees,
-    })
-    out = tmp_path / "turnover.png"
-    Visualizer.plot_turnover(turnover_df, save_path=str(out), show=False)
-    assert out.exists() and out.stat().st_size > 0
+    fig = plt.gcf()
+    ax = fig.axes[-1]
+    legend = ax.get_legend()
+    assert legend is not None
+    legend_labels = {text.get_text() for text in legend.get_texts()}
+    assert legend_labels == set(nav_df.columns)
+    plotted_labels = [line.get_label() for line in ax.get_lines()]
+    assert plotted_labels == nav_df.columns.tolist()

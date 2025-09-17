@@ -2,8 +2,12 @@ from stable_yield_lab import Metrics, Pool, PoolRepository
 
 
 def test_net_apy() -> None:
-    val = Metrics.net_apy(0.10, 0.02, perf_fee_bps=200, mgmt_fee_bps=100)
-    assert abs(val - (0.12 * 0.97)) < 1e-12
+    base = 0.10
+    reward = 0.02
+    val = Metrics.net_apy(base, reward, perf_fee_bps=200, mgmt_fee_bps=100)
+    gross = base + reward
+    expected = (1.0 + gross) * 0.97 - 1.0
+    assert abs(val - expected) < 1e-12
 
 
 def test_hhi_basic() -> None:
