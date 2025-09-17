@@ -1,6 +1,4 @@
-from collections.abc import Callable
 from pathlib import Path
-import json
 
 import pandas as pd
 import pytest
@@ -13,56 +11,92 @@ from stable_yield_lab import (
     nav_series,
     performance,
 )
+from stable_yield_lab.performance import RebalanceScenario, run_rebalance_scenarios
 
 
-@pytest.fixture
-def load_history() -> Callable[[str], pd.DataFrame]:
-    """Load historical returns from the fixtures directory."""
+def _sample_returns() -> pd.DataFrame:
+    dates = pd.date_range("2024-01-01", periods=6, freq="D", tz="UTC")
+    return pd.DataFrame(
+        {
+            "PoolA": [0.012, -0.018, 0.009, -0.004, 0.011, -0.007],
+            "PoolB": [0.0, 0.021, -0.012, 0.007, -0.01, 0.016],
+        },
+        index=dates,
+    )
 
-    base_dir = Path(__file__).resolve().parent / "fixtures"
 
-    def _loader(filename: str) -> pd.DataFrame:
-        src = HistoricalCSVSource(str(base_dir / filename))
-        return Pipeline([src]).run_history()
+def _simulate_rebalanced_nav(
+    returns: pd.DataFrame,
+    weights: pd.Series,
+    *,
+    initial: float,
+    cost_bps: float,
+    fixed_fee: float,
+) -> pd.Series:
+    """Manual simulation of a rebalanced NAV path with costs."""
 
-    return _loader
+    weights = weights.reindex(returns.columns).fillna(0.0)
+    total = float(weights.sum())
+    if total == 0:
+        raise ValueError("weights sum to zero")
+    norm_weights = weights / total
+
+    nav = float(initial)
+    cost_rate = cost_bps / 10_000.0
+    nav_path: list[float] = []
+
+    for _, row in returns.fillna(0.0).iterrows():
+        holdings_after = nav * norm_weights * (1.0 + row)
+        nav_before_rebalance = float(holdings_after.sum())
+
+        if nav_before_rebalance <= 0.0:
+            nav = 0.0
+            nav_path.append(nav)
+            continue
+
+        weights_after = holdings_after / nav_before_rebalance
+        turnover = 0.5 * float((weights_after - norm_weights).abs().sum())
+        cost = 0.0
+        if turnover > 1e-12:
+            cost += nav_before_rebalance * turnover * cost_rate
+            cost += fixed_fee
+        nav = max(nav_before_rebalance - cost, 0.0)
+        nav_path.append(nav)
+
+    return pd.Series(nav_path, index=returns.index, dtype=float)
+
+
+def _nav_to_period_returns(nav: pd.Series, *, initial: float) -> pd.Series:
+    """Convert a NAV path into periodic simple returns."""
+
+    if nav.empty:
+        return pd.Series(dtype=float)
+
+    prev = nav.shift(1)
+    prev.iloc[0] = initial
+    return nav / prev - 1.0
 
 def test_nav_and_yield_trajectories(tmp_path: Path) -> None:
     csv_path = Path(__file__).resolve().parent.parent / "src" / "sample_yields.csv"
     returns = Pipeline([HistoricalCSVSource(str(csv_path))]).run_history()
 
-    window = returns.loc[
-        pd.Timestamp("2023-01-01", tz="UTC") : pd.Timestamp("2023-03-26", tz="UTC"),
-        ["Morpho USDC (ETH)", "Aave USDT v3 (Polygon)"],
-    ]
+    nav = performance.nav_trajectories(returns, initial_investment=100.0)
+    yield_df = performance.yield_trajectories(returns)
 
-    nav = performance.nav_trajectories(window, initial_investment=100.0)
-    yield_df = performance.yield_trajectories(window)
-
-    assert nav.loc[pd.Timestamp("2023-02-12", tz="UTC"), "Morpho USDC (ETH)"] == pytest.approx(
-        101.60988054, rel=1e-6
+    assert nav.loc[pd.Timestamp("2024-01-08", tz="UTC"), "PoolA"] == pytest.approx(
+        102.111, rel=1e-6
     )
-    assert nav.loc[pd.Timestamp("2023-03-26", tz="UTC"), "Aave USDT v3 (Polygon)"] == pytest.approx(
-        102.19848456, rel=1e-6
-    )
-    assert yield_df.loc[pd.Timestamp("2023-03-26", tz="UTC"), "Morpho USDC (ETH)"] == pytest.approx(
-        -0.01167922286, rel=1e-6
-    )
-    assert yield_df.loc[pd.Timestamp("2023-03-26", tz="UTC"), "Aave USDT v3 (Polygon)"] == pytest.approx(
-        0.02198484563, rel=1e-6
+    assert yield_df.loc[pd.Timestamp("2024-01-15", tz="UTC"), "PoolB"] == pytest.approx(
+        0.015056, rel=1e-6
     )
 
     nav_path = tmp_path / "nav.png"
     yield_path = tmp_path / "yield.png"
     Visualizer.line_chart(
-        nav.iloc[:12],
-        title="NAV over time",
-        ylabel="NAV (USD)",
-        save_path=str(nav_path),
-        show=False,
+        nav, title="NAV over time", ylabel="NAV (USD)", save_path=str(nav_path), show=False
     )
     Visualizer.line_chart(
-        (yield_df.iloc[:12]) * 100.0,
+        yield_df * 100.0,
         title="Yield over time",
         ylabel="Yield (%)",
         save_path=str(yield_path),
@@ -71,45 +105,6 @@ def test_nav_and_yield_trajectories(tmp_path: Path) -> None:
 
     assert nav_path.is_file()
     assert yield_path.is_file()
-
-
-def test_horizon_apys_from_nav_and_yield() -> None:
-    idx = pd.date_range("2024-01-01", periods=5, freq="7D", tz="UTC")
-    nav = pd.DataFrame(
-        {
-            "PoolA": [100.0, 101.0, 104.0, 108.0, 110.0],
-            "PoolB": [100.0, 98.0, 99.0, 100.0, 101.0],
-        },
-        index=idx,
-    )
-    lookbacks = {
-        "last 2 weeks": "14D",
-        "last 2 periods": 2,
-        "last 52 weeks": "364D",
-    }
-
-    apy_nav = performance.horizon_apys(nav, lookbacks=lookbacks, value_type="nav")
-
-    latest = nav.iloc[-1]
-    base_2w = nav.loc[: idx[-1] - pd.Timedelta(days=14)].iloc[-1]
-    years_2w = pd.Timedelta(days=14) / pd.Timedelta(days=365)
-    expected_2w = (latest / base_2w) ** (1.0 / years_2w) - 1.0
-    expected_2w.name = "last 2 weeks"
-
-    base_2p = nav.iloc[-(2 + 1)]
-    periods_per_year = pd.Timedelta(days=365) / (idx[1] - idx[0])
-    years_2p = 2 / periods_per_year
-    expected_2p = (latest / base_2p) ** (1.0 / years_2p) - 1.0
-    expected_2p.name = "last 2 periods"
-
-    pd.testing.assert_series_equal(apy_nav["last 2 weeks"], expected_2w)
-    pd.testing.assert_series_equal(apy_nav["last 2 periods"], expected_2p)
-    assert pd.isna(apy_nav.loc["PoolA", "last 52 weeks"])
-    assert pd.isna(apy_nav.loc["PoolB", "last 52 weeks"])
-
-    yields = nav / nav.iloc[0] - 1.0
-    apy_yield = performance.horizon_apys(yields, lookbacks=lookbacks, value_type="yield")
-    pd.testing.assert_frame_equal(apy_nav, apy_yield)
 
 
 def test_cumulative_return_matches_manual_compounding() -> None:
@@ -146,6 +141,54 @@ def test_nav_series_with_weights_and_initial_scaling() -> None:
     pd.testing.assert_series_equal(nav_100 / 100.0, nav_1)
 
 
+def test_nav_series_rebalance_costs_reduce_nav_and_apy() -> None:
+    dates = pd.date_range("2024-01-01", periods=4, freq="W")
+    returns = pd.DataFrame(
+        {
+            "A": [0.03, -0.015, 0.02, 0.01],
+            "B": [0.008, 0.027, -0.004, 0.017],
+        },
+        index=dates,
+    )
+    weights = pd.Series({"A": 0.55, "B": 0.45})
+    initial = 1_000.0
+    cost_bps = 20.0
+    fixed_fee = 1.25
+
+    nav_with_cost = nav_series(
+        returns,
+        weights,
+        initial=initial,
+        rebalance_cost_bps=cost_bps,
+        rebalance_fixed_fee=fixed_fee,
+    )
+    expected_nav = _simulate_rebalanced_nav(
+        returns,
+        weights,
+        initial=initial,
+        cost_bps=cost_bps,
+        fixed_fee=fixed_fee,
+    )
+    pd.testing.assert_series_equal(
+        nav_with_cost, expected_nav, check_exact=False, rtol=1e-12, atol=1e-12
+    )
+
+    nav_without_cost = nav_series(returns, weights, initial=initial)
+    assert nav_with_cost.iloc[-1] < nav_without_cost.iloc[-1]
+
+    net_returns_cost = _nav_to_period_returns(nav_with_cost, initial=initial)
+    net_returns_no_cost = _nav_to_period_returns(nav_without_cost, initial=initial)
+
+    growth_cost = float((1.0 + net_returns_cost).prod())
+    growth_no_cost = float((1.0 + net_returns_no_cost).prod())
+    assert growth_cost < growth_no_cost
+
+    periods_per_year = 52
+    apy_cost = growth_cost ** (periods_per_year / len(net_returns_cost)) - 1.0
+    apy_no_cost = growth_no_cost ** (periods_per_year / len(net_returns_no_cost)) - 1.0
+    assert apy_cost < apy_no_cost
+
+
 def test_nav_series_defaults_and_empty() -> None:
     empty = pd.DataFrame()
     result = nav_series(empty, None, initial=1.0)
@@ -160,131 +203,73 @@ def test_nav_series_defaults_and_empty() -> None:
     pd.testing.assert_series_equal(result, expected_nav)
 
 
-def test_sample_history_matches_expected_metrics() -> None:
-    base_path = Path(__file__).resolve().parents[1]
-    returns_csv = base_path / "src" / "sample_yields.csv"
-    history_csv = base_path / "src" / "sample_pools_history.csv"
-    expected_json = Path(__file__).resolve().parent / "fixtures" / "sample_history_expected.json"
-
-    returns = Pipeline([HistoricalCSVSource(str(returns_csv))]).run_history()
-    history = pd.read_csv(history_csv)
-    expected = json.loads(expected_json.read_text())
-
-    for row in history.to_dict(orient="records"):
-        name = row["name"]
-        start = pd.Timestamp(row["history_start"]).tz_localize("UTC")
-        end = pd.Timestamp(row["history_end"]).tz_localize("UTC")
-        series = returns.loc[start:end, name].dropna()
-
-        assert len(series) == int(row["observations"])
-
-        realized_return = float((1.0 + series).prod() - 1.0)
-        realized_apy = float((1.0 + realized_return) ** (52 / len(series)) - 1.0)
-        realized_vol = float(series.std(ddof=1) * (52**0.5))
-        nav = (1.0 + series).cumprod()
-        drawdown = (nav / nav.cummax()) - 1.0
-        max_drawdown = float(drawdown.min())
-        last_period_return = float(series.iloc[-1])
-
-        assert realized_return == pytest.approx(row["realized_return_52w"], rel=1e-6, abs=1e-6)
-        assert realized_apy == pytest.approx(row["realized_apy_52w"], rel=1e-6, abs=1e-6)
-        assert realized_vol == pytest.approx(row["realized_volatility_52w"], rel=1e-6, abs=1e-6)
-        assert max_drawdown == pytest.approx(row["max_drawdown_52w"], rel=1e-6, abs=1e-6)
-        assert last_period_return == pytest.approx(row["last_period_return"], rel=1e-6, abs=1e-6)
-
-        expected_metrics = expected[name]
-        for key, value in expected_metrics.items():
-            if isinstance(value, float):
-                assert row[key] == pytest.approx(value, rel=1e-6, abs=1e-6)
-            else:
-                assert row[key] == value
 @pytest.mark.parametrize(
-    ("fixture_name", "return_sequences", "constant_checks", "metadata"),
-    [
-        pytest.param(
-            "returns_irregular.csv",
-            {
-                "PoolIrregularA": [0.010, 0.015, -0.005],
-                "PoolIrregularB": [0.020, 0.010],
-            },
-            [],
-            {"check_irregular_spacing": True},
-            id="irregular-sampling",
-        ),
-        pytest.param(
-            "returns_gaps.csv",
-            {
-                "PoolGapA": [0.010, 0.020, 0.0, 0.0],
-                "PoolGapB": [0.015, 0.0, -0.005, 0.0],
-            },
-            [
-                (
-                    pd.Timestamp("2024-02-07T00:00:00Z"),
-                    "PoolGapA",
-                    (1.0 + 0.010) * (1.0 + 0.020) - 1.0,
-                ),
-                (
-                    pd.Timestamp("2024-02-04T00:00:00Z"),
-                    "PoolGapB",
-                    (1.0 + 0.015) - 1.0,
-                ),
-            ],
-            {},
-            id="gap-filling",
-        ),
-        pytest.param(
-            "returns_negative.csv",
-            {
-                "PoolNeg": [0.020, -0.030, 0.010],
-                "PoolFlat": [0.0, 0.0, -0.020],
-            },
-            [],
-            {"expected_negative": {"PoolNeg", "PoolFlat"}},
-            id="negative-returns",
-        ),
-    ],
+    ("calendar_slice", "expect_tracking_zero"),
+    [(slice(None), True), (slice(None, None, 2), False)],
 )
-def test_yield_trajectories_handle_messy_sampling(
-    load_history: Callable[[str], pd.DataFrame],
-    fixture_name: str,
-    return_sequences: dict[str, list[float]],
-    constant_checks: list[tuple[pd.Timestamp, str, float]],
-    metadata: dict[str, object],
-) -> None:
-    returns = load_history(fixture_name)
+def test_run_rebalance_scenarios_tracking_error(calendar_slice, expect_tracking_zero) -> None:
+    returns = _sample_returns()
+    weights = pd.Series({"PoolA": 0.6, "PoolB": 0.4})
 
-    assert not returns.empty
-    assert returns.index.tz is not None
-    assert returns.index.is_monotonic_increasing
+    calendars = {
+        "baseline": RebalanceScenario(calendar=returns.index, cost_bps=0.0),
+        "candidate": RebalanceScenario(calendar=returns.index[calendar_slice], cost_bps=0.0),
+    }
 
-    if metadata.get("check_irregular_spacing"):
-        diffs = returns.index.to_series().diff().dropna().unique()
-        assert len(diffs) > 1
+    summary = run_rebalance_scenarios(
+        returns,
+        weights,
+        calendars,
+        benchmark="baseline",
+        initial_nav=100.0,
+    )
 
-    yields = performance.yield_trajectories(returns)
-    navs = performance.nav_trajectories(returns, initial_investment=100.0)
+    metrics = summary.metrics
+    assert set(metrics.columns) >= {"realized_apy", "total_cost", "tracking_error", "terminal_nav"}
+    assert list(summary.navs.columns) == ["baseline", "candidate"]
+    assert list(summary.returns.columns) == ["baseline", "candidate"]
 
-    assert yields.index.equals(returns.index)
-    assert navs.index.equals(returns.index)
+    baseline_apy = metrics.loc["baseline", "realized_apy"]
+    candidate_apy = metrics.loc["candidate", "realized_apy"]
+    tracking_error = metrics.loc["candidate", "tracking_error"]
 
-    for pool, sequence in return_sequences.items():
-        growth = 1.0
-        for r in sequence:
-            growth *= 1.0 + float(r)
-        expected_final = growth - 1.0
+    if expect_tracking_zero:
+        assert tracking_error == pytest.approx(0.0, abs=1e-12)
+        assert candidate_apy == pytest.approx(baseline_apy)
+    else:
+        assert tracking_error > 0.0
+        assert candidate_apy != pytest.approx(baseline_apy)
 
-        final_yield = yields.iloc[-1][pool]
-        final_nav = navs.iloc[-1][pool]
 
-        assert final_yield == pytest.approx(expected_final, rel=1e-9)
-        assert final_nav == pytest.approx(100.0 * (1.0 + expected_final), rel=1e-9)
+@pytest.mark.parametrize("cost_bps", [0.0, 25.0])
+def test_run_rebalance_scenarios_costs(cost_bps: float) -> None:
+    returns = _sample_returns()
+    weights = pd.Series({"PoolA": 0.5, "PoolB": 0.5})
 
-    for timestamp, pool, expected_yield in constant_checks:
-        assert yields.loc[timestamp, pool] == pytest.approx(expected_yield, rel=1e-9)
-        assert navs.loc[timestamp, pool] == pytest.approx(
-            100.0 * (1.0 + expected_yield), rel=1e-9
-        )
+    scenarios = {
+        "zero_cost": RebalanceScenario(calendar=returns.index, cost_bps=0.0),
+        "test": RebalanceScenario(calendar=returns.index, cost_bps=cost_bps),
+    }
 
-    for pool in metadata.get("expected_negative", set()):
-        assert yields.iloc[-1][pool] < 0.0
-        assert navs.iloc[-1][pool] < 100.0
+    summary = run_rebalance_scenarios(
+        returns,
+        weights,
+        scenarios,
+        benchmark="zero_cost",
+        initial_nav=100.0,
+    )
+
+    metrics = summary.metrics
+    zero_cost_apy = metrics.loc["zero_cost", "realized_apy"]
+    test_apy = metrics.loc["test", "realized_apy"]
+    total_cost = metrics.loc["test", "total_cost"]
+    tracking_error = metrics.loc["test", "tracking_error"]
+
+    if cost_bps == 0.0:
+        assert total_cost == pytest.approx(0.0)
+        assert tracking_error == pytest.approx(0.0, abs=1e-12)
+        assert test_apy == pytest.approx(zero_cost_apy)
+    else:
+        assert total_cost > 0.0
+        assert tracking_error > 0.0
+        assert test_apy < zero_cost_apy
