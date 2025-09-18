@@ -19,6 +19,14 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Install Poetry
+        uses: snok/install-poetry@v1
+        with:
+          version: 1.8.4
+          virtualenvs-create: true
+          virtualenvs-in-project: true
+          installer-parallel: true
+
       - name: Set up Python
         id: setup-python
         uses: actions/setup-python@v5
@@ -27,14 +35,6 @@ jobs:
           cache: 'poetry'
           # poetry.lock is intentionally ignored; fall back to pyproject for cache key.
           cache-dependency-path: pyproject.toml
-
-      - name: Install Poetry
-        uses: snok/install-poetry@v1
-        with:
-          version: 1.8.4
-          virtualenvs-create: true
-          virtualenvs-in-project: true
-          installer-parallel: true
 
       - name: Install dependencies
         run: |
