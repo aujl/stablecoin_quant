@@ -1,0 +1,100 @@
+name: Codex request comment
+
+description: Post a standardized Codex request comment with optional duplicate suppression and existing-comment checks.
+
+inputs:
+  github-token:
+    description: Token with permission to create issue or pull request comments.
+    required: true
+  comment-body:
+    description: The body of the comment to create.
+    required: true
+  trigger-text:
+    description: Text used to describe the automation trigger and to detect duplicates.
+    required: true
+  dedupe:
+    description: Set to "true" to skip creating a new comment when a matching bot comment already exists.
+    required: false
+    default: 'false'
+  require-existing-comment:
+    description: Set to "true" to only post when a matching existing comment is present.
+    required: false
+    default: 'false'
+  existing-comment-query:
+    description: Optional substring to search for when require-existing-comment is enabled. Defaults to trigger-text when omitted.
+    required: false
+    default: ''
+  existing-comment-author:
+    description: Optional login that an existing comment must match when require-existing-comment is enabled.
+    required: false
+    default: ''
+
+runs:
+  using: composite
+  steps:
+    - name: Submit Codex request comment
+      uses: actions/github-script@v7
+      with:
+        github-token: ${{ inputs.github-token }}
+        result-encoding: string
+        script: |
+          const commentBody = core.getInput('comment-body', { required: true });
+          const triggerText = core.getInput('trigger-text', { required: true });
+          const dedupe = core.getBooleanInput('dedupe');
+          const requireExisting = core.getBooleanInput('require-existing-comment');
+          const existingQueryInput = core.getInput('existing-comment-query');
+          const existingAuthor = core.getInput('existing-comment-author');
+          const existingQuery = existingQueryInput || triggerText;
+
+          if (!context.issue?.number) {
+            core.setFailed('No issue or pull request number available in the current context.');
+            return;
+          }
+
+          const comments = await github.paginate(github.rest.issues.listComments, {
+            ...context.repo,
+            issue_number: context.issue.number,
+            per_page: 100
+          });
+
+          if (requireExisting) {
+            const found = comments.some((comment) => {
+              if (existingAuthor && comment.user?.login !== existingAuthor) {
+                return false;
+              }
+              return comment.body?.includes(existingQuery);
+            });
+
+            if (!found) {
+              core.info(`No existing comment found containing "${existingQuery}"${existingAuthor ? ` from ${existingAuthor}` : ''}. Skipping Codex request.`);
+              return;
+            }
+          }
+
+          if (dedupe) {
+            const duplicate = comments.some((comment) => {
+              if (comment.user?.login !== 'github-actions[bot]') {
+                return false;
+              }
+              return comment.body?.includes(triggerText);
+            });
+
+            if (duplicate) {
+              core.info(`Codex request already posted for trigger "${triggerText}". Skipping duplicate.`);
+              return;
+            }
+          }
+
+          await github.rest.issues.createComment({
+            ...context.repo,
+            issue_number: context.issue.number,
+            body: commentBody
+          });
+
+          core.info('Codex request comment created.');
+      comment-body: ${{ inputs.comment-body }}
+      trigger-text: ${{ inputs.trigger-text }}
+      dedupe: ${{ inputs.dedupe }}
+      require-existing-comment: ${{ inputs.require-existing-comment }}
+      existing-comment-query: ${{ inputs.existing-comment-query }}
+      existing-comment-author: ${{ inputs.existing-comment-author }}

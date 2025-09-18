@@ -13,17 +13,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Request Codex triage
-        uses: actions/github-script@v7
+        uses: ./.github/actions/codex-request
         with:
-          script: |
-            const body = [
-              '@codex please help triage this issue.',
-              '',
-              'Review the report, reproduce if possible, label severity, and outline next steps for the team.'
-            ].join('\n');
+          github-token: ${{ github.token }}
+          comment-body: |
+            @codex please help triage this issue.
 
-            await github.rest.issues.createComment({
-              ...context.repo,
-              issue_number: context.issue.number,
-              body
-            });
+            Review the report, reproduce if possible, label severity, and outline next steps for the team.
+          trigger-text: '@codex please help triage this issue.'

@@ -14,17 +14,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Request Codex follow-up
-        uses: actions/github-script@v7
+        uses: ./.github/actions/codex-request
         with:
-          script: |
-            const body = [
-              '@codex please review the latest discussion.',
-              '',
-              'Summarize the thread, propose next actions, and flag owners who should respond.'
-            ].join('\n');
+          github-token: ${{ github.token }}
+          comment-body: |
+            @codex please review the latest discussion.
 
-            await github.rest.issues.createComment({
-              ...context.repo,
-              issue_number: context.issue.number,
-              body
-            });
+            Summarize the thread, propose next actions, and flag owners who should respond.
+          trigger-text: '@codex please review the latest discussion.'
