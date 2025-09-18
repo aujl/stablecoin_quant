@@ -45,11 +45,12 @@ Core data models now live under ``stable_yield_lab.core``:
 
 ```python
 from stable_yield_lab.core import Pool, PoolRepository, ReturnRepository
+from stable_yield_lab.visualization import Visualizer
 ```
 
 The script applies `stable_yield_lab.analytics.performance.nav_trajectories`
 and `stable_yield_lab.analytics.performance.yield_trajectories` to compute
-time-series performance. `Visualizer.plot_nav` and `Visualizer.plot_yield`
+time-series performance. `Visualizer.line_chart` and `Visualizer.line_yield`
 render the NAV trajectory and annualized yields.
 A steadily rising NAV indicates compounding growth; falling or flat lines flag underperformance.
 For a step-by-step example, see [docs/investor_walkthrough.md](docs/investor_walkthrough.md).

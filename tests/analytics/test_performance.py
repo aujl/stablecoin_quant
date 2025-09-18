@@ -5,7 +5,7 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
-from stable_yield_lab import Pipeline, Visualizer
+from stable_yield_lab import Pipeline
 from stable_yield_lab.analytics import performance
 from stable_yield_lab.analytics.performance import (
     RebalanceScenario,
@@ -16,6 +16,7 @@ from stable_yield_lab.analytics.performance import (
     run_rebalance_scenarios,
 )
 from stable_yield_lab.sources import HistoricalCSVSource
+from stable_yield_lab.visualization import Visualizer
 
 
 def _sample_returns() -> pd.DataFrame:

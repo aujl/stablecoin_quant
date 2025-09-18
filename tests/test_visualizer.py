@@ -4,7 +4,7 @@ import matplotlib
 from matplotlib import pyplot as plt
 import pandas as pd
 
-from stable_yield_lab import Visualizer
+from stable_yield_lab.visualization import Visualizer
 
 matplotlib.use("Agg")
 
