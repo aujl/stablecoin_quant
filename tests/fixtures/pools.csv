@@ -1,0 +1,3 @@
+name,chain,stablecoin,tvl_usd,base_apy,reward_apy,is_auto,source,risk_score,timestamp
+Auto Pool,Ethereum,USDC,1000000,0.05,0.01,True,custom,2.5,1700000000
+Manual Pool,Polygon,USDT,500000,0.04,0.0,False,custom,1.8,1700003600

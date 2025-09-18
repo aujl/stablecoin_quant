@@ -12,274 +12,34 @@ Design goals:
 from __future__ import annotations
 
 from collections.abc import Iterable
-from datetime import UTC, datetime
-from pathlib import Path
-from typing import Any, Mapping, Protocol
-import json
+from typing import Any, Mapping
+
 import logging
-import urllib.request
 import pandas as pd
 
 from . import attribution, performance, risk_scoring
-from .core import Pool, PoolRepository, PoolReturn, ReturnRepository, STABLE_TOKENS
+from .core import Pool, PoolRepository, PoolReturn, ReturnRepository
 from .performance import cumulative_return, nav_series, nav_trajectories
+from .sources import (
+    BeefySource,
+    CSVSource,
+    DataSource,
+    DefiLlamaSource,
+    HistoricalCSVSource,
+    MorphoSource,
+)
 
 
 # -----------------
 # Data Model
 # -----------------
 
-
 # -----------------
 # Data Sources API
 # -----------------
 
-
-class DataSource(Protocol):
-    """Adapter protocol: produce a list of Pool objects (base APY preferred)."""
-
-    def fetch(self) -> list[Pool]: ...
-
-
-class CSVSource:
-    """Load pools from a CSV mapping columns to :class:`Pool` fields."""
-
-    def __init__(self, path: str) -> None:
-        self.path = path
-
-    def fetch(self) -> list[Pool]:
-        df = pd.read_csv(self.path)
-        pools: list[Pool] = []
-        now = datetime.now(tz=UTC).timestamp()
-        for _, r in df.iterrows():
-            pools.append(
-                Pool(
-                    name=str(r.get("name", "")),
-                    chain=str(r.get("chain", "")),
-                    stablecoin=str(r.get("stablecoin", "")),
-                    tvl_usd=float(r.get("tvl_usd", 0.0)),
-                    base_apy=float(r.get("base_apy", 0.0)),
-                    reward_apy=float(r.get("reward_apy", 0.0)),
-                    is_auto=bool(r.get("is_auto", True)),
-                    source=str(r.get("source", "csv")),
-                    risk_score=float(r.get("risk_score", 2.0)),
-                    timestamp=float(r.get("timestamp", now)),
-                )
-            )
-        return pools
-
-
-class HistoricalCSVSource:
-    """Load periodic returns from a CSV with timestamp, name and period_return."""
-
-    def __init__(self, path: str) -> None:
-        self.path = path
-
-    def fetch(self) -> list[PoolReturn]:
-        df = pd.read_csv(self.path)
-        required = {"timestamp", "name", "period_return"}
-        missing = required.difference(df.columns)
-        if missing:
-            raise ValueError(f"CSV missing columns: {missing}")
-        df["timestamp"] = pd.to_datetime(df["timestamp"], utc=True)
-        rows = [
-            PoolReturn(
-                name=str(r["name"]),
-                timestamp=pd.Timestamp(r["timestamp"]),
-                period_return=float(r["period_return"]),
-            )
-            for _, r in df.iterrows()
-        ]
-        return rows
-
-
+# Concrete adapters live in :mod:`stable_yield_lab.sources`.
 logger = logging.getLogger(__name__)
-
-
-class DefiLlamaSource:
-    """HTTP client for yields.llama.fi/pools."""
-
-    URL = "https://yields.llama.fi/pools"
-
-    def __init__(self, stable_only: bool = True, cache_path: str | None = None) -> None:
-        self.stable_only = stable_only
-        self.cache_path = Path(cache_path) if cache_path else None
-
-    def _load(self) -> dict[str, Any]:
-        if self.cache_path and self.cache_path.exists():
-            with self.cache_path.open() as f:
-                return json.load(f)
-        with urllib.request.urlopen(self.URL) as resp:
-            data = json.load(resp)
-        if self.cache_path:
-            self.cache_path.parent.mkdir(parents=True, exist_ok=True)
-            with self.cache_path.open("w") as f:
-                json.dump(data, f)
-        return data
-
-    def fetch(self) -> list[Pool]:
-        try:
-            raw = self._load()
-        except Exception as exc:  # pragma: no cover - network errors
-            logger.warning("DefiLlama request failed: %s", exc)
-            return []
-        pools: list[Pool] = []
-        now = datetime.now(tz=UTC).timestamp()
-        for item in raw.get("data", []):
-            if self.stable_only and not item.get("stablecoin"):
-                continue
-            base_val = item.get("apyBase")
-            if base_val is None:
-                base_val = item.get("apy", 0.0)
-            reward_val = item.get("apyReward") or 0.0
-            pools.append(
-                Pool(
-                    name=f"{item.get('project', '')}:{item.get('symbol', '')}",
-                    chain=str(item.get("chain", "")),
-                    stablecoin=str(item.get("symbol", "")),
-                    tvl_usd=float(item.get("tvlUsd", 0.0)),
-                    base_apy=float(base_val) / 100.0,
-                    reward_apy=float(reward_val) / 100.0,
-                    is_auto=False,
-                    source="defillama",
-                    timestamp=now,
-                )
-            )
-        return pools
-
-
-class MorphoSource:
-    """GraphQL client for Morpho Blue markets."""
-
-    URL = "https://blue-api.morpho.org/graphql"
-
-    def __init__(self, cache_path: str | None = None) -> None:
-        self.cache_path = Path(cache_path) if cache_path else None
-
-    def _post_json(self) -> dict[str, Any]:
-        payload = {
-            "query": (
-                "{ markets { items { uniqueKey loanAsset { symbol } "
-                "collateralAsset { symbol } state { supplyApy supplyAssetsUsd } } } }"
-            )
-        }
-        req = urllib.request.Request(
-            self.URL,
-            data=json.dumps(payload).encode(),
-            headers={"Content-Type": "application/json"},
-        )
-        with urllib.request.urlopen(req) as resp:
-            return json.load(resp)
-
-    def _load(self) -> dict[str, Any]:
-        if self.cache_path and self.cache_path.exists():
-            with self.cache_path.open() as f:
-                return json.load(f)
-        data = self._post_json()
-        if self.cache_path:
-            self.cache_path.parent.mkdir(parents=True, exist_ok=True)
-            with self.cache_path.open("w") as f:
-                json.dump(data, f)
-        return data
-
-    def fetch(self) -> list[Pool]:
-        try:
-            raw = self._load()
-        except Exception as exc:  # pragma: no cover - network errors
-            logger.warning("Morpho request failed: %s", exc)
-            return []
-        pools: list[Pool] = []
-        now = datetime.now(tz=UTC).timestamp()
-        items = raw.get("data", {}).get("markets", {}).get("items", [])
-        for item in items:
-            sym = str(item.get("loanAsset", {}).get("symbol", ""))
-            if sym.upper() not in STABLE_TOKENS:
-                continue
-            pools.append(
-                Pool(
-                    name=f"{sym}-{item.get('collateralAsset', {}).get('symbol', '')}",
-                    chain="Ethereum",
-                    stablecoin=sym,
-                    tvl_usd=float(item.get("state", {}).get("supplyAssetsUsd", 0.0)),
-                    base_apy=float(item.get("state", {}).get("supplyApy", 0.0)) / 100.0,
-                    reward_apy=0.0,
-                    is_auto=True,
-                    source="morpho",
-                    timestamp=now,
-                )
-            )
-        return pools
-
-
-class BeefySource:
-    """HTTP client for Beefy vault data."""
-
-    VAULTS_URL = "https://api.beefy.finance/vaults"
-    APY_URL = "https://api.beefy.finance/apy"
-    TVL_URL = "https://api.beefy.finance/tvl"
-
-    CHAIN_IDS = {
-        "ethereum": "1",
-        "bsc": "56",
-        "polygon": "137",
-        "arbitrum": "42161",
-        "optimism": "10",
-    }
-
-    def __init__(self, cache_dir: str | None = None) -> None:
-        self.cache_dir = Path(cache_dir) if cache_dir else None
-
-    def _get_json(self, name: str, url: str) -> Any:
-        if self.cache_dir:
-            path = self.cache_dir / f"{name}.json"
-            if path.exists():
-                with path.open() as f:
-                    return json.load(f)
-        with urllib.request.urlopen(url) as resp:
-            data = json.load(resp)
-        if self.cache_dir:
-            self.cache_dir.mkdir(parents=True, exist_ok=True)
-            with (self.cache_dir / f"{name}.json").open("w") as f:
-                json.dump(data, f)
-        return data
-
-    def fetch(self) -> list[Pool]:
-        try:
-            vaults = self._get_json("vaults", self.VAULTS_URL)
-            apy = self._get_json("apy", self.APY_URL)
-            tvl = self._get_json("tvl", self.TVL_URL)
-        except Exception as exc:  # pragma: no cover - network errors
-            logger.warning("Beefy request failed: %s", exc)
-            return []
-        pools: list[Pool] = []
-        now = datetime.now(tz=UTC).timestamp()
-        for v in vaults:
-            if v.get("status") != "active":
-                continue
-            assets = v.get("assets") or []
-            if not assets or not all(
-                a.upper() in STABLE_TOKENS or "USD" in a.upper() for a in assets
-            ):
-                continue
-            chain = str(v.get("chain", ""))
-            chain_id = self.CHAIN_IDS.get(chain.lower(), chain)
-            tvl_usd = float(tvl.get(str(chain_id), {}).get(v["id"], 0.0))
-            base = float(apy.get(v["id"], 0.0))
-            pools.append(
-                Pool(
-                    name=str(v.get("name", v["id"])),
-                    chain=chain,
-                    stablecoin=str(assets[0]),
-                    tvl_usd=tvl_usd,
-                    base_apy=base,
-                    reward_apy=0.0,
-                    is_auto=True,
-                    source="beefy",
-                    timestamp=now,
-                )
-            )
-        return pools
-
 
 # -----------------
 # Metrics & Analytics

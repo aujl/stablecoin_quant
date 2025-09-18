@@ -2,7 +2,8 @@ from pathlib import Path
 
 import pandas as pd
 
-from stable_yield_lab import HistoricalCSVSource, Pipeline
+from stable_yield_lab import Pipeline
+from stable_yield_lab.sources import HistoricalCSVSource
 
 
 def test_historical_csv_parsing_and_alignment() -> None:

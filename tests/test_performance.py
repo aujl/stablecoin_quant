@@ -3,15 +3,9 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
-from stable_yield_lab import (
-    HistoricalCSVSource,
-    Pipeline,
-    Visualizer,
-    cumulative_return,
-    nav_series,
-    performance,
-)
+from stable_yield_lab import Pipeline, Visualizer, cumulative_return, nav_series, performance
 from stable_yield_lab.performance import RebalanceScenario, run_rebalance_scenarios
+from stable_yield_lab.sources import HistoricalCSVSource
 
 
 def _sample_returns() -> pd.DataFrame:
