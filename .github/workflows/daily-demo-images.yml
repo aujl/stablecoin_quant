@@ -22,6 +22,8 @@ jobs:
         with:
           python-version: '3.12'
           cache: 'poetry'
+          # poetry.lock is intentionally ignored; fall back to pyproject for cache key.
+          cache-dependency-path: pyproject.toml
 
       - name: Install Poetry
         uses: snok/install-poetry@v1
