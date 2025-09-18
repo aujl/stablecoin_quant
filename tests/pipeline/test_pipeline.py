@@ -7,7 +7,7 @@ from stable_yield_lab.risk_scoring import calculate_risk_score
 
 
 def test_pipeline_loads_sample_csv() -> None:
-    csv_path = Path(__file__).resolve().parent.parent / "src" / "sample_pools.csv"
+    csv_path = Path(__file__).resolve().parents[2] / "src" / "sample_pools.csv"
     src = CSVSource(str(csv_path))
     repo = Pipeline([src]).run()
     assert len(repo) > 0

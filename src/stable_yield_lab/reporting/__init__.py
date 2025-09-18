@@ -6,7 +6,7 @@ import pandas as pd
 
 from stable_yield_lab.core import PoolRepository
 
-from .analytics.metrics import Metrics
+from ..analytics.metrics import Metrics
 
 _RISK_COLUMNS = [
     "sharpe_ratio",
