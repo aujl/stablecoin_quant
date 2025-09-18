@@ -1,10 +1,20 @@
+from __future__ import annotations
+
 from pathlib import Path
 
 import pandas as pd
 import pytest
 
-from stable_yield_lab import Pipeline, Visualizer, cumulative_return, nav_series, performance
-from stable_yield_lab.performance import RebalanceScenario, run_rebalance_scenarios
+from stable_yield_lab import Pipeline, Visualizer
+from stable_yield_lab.analytics import performance
+from stable_yield_lab.analytics.performance import (
+    RebalanceScenario,
+    ScenarioRunResult,
+    cumulative_return,
+    nav_series,
+    nav_trajectories,
+    run_rebalance_scenarios,
+)
 from stable_yield_lab.sources import HistoricalCSVSource
 
 
@@ -20,7 +30,7 @@ def _sample_returns() -> pd.DataFrame:
 
 
 def test_nav_and_yield_trajectories(tmp_path: Path) -> None:
-    csv_path = Path(__file__).resolve().parent.parent / "src" / "sample_yields.csv"
+    csv_path = Path(__file__).resolve().parents[2] / "src" / "sample_yields.csv"
     returns = Pipeline([HistoricalCSVSource(str(csv_path))]).run_history()
 
     nav = performance.nav_trajectories(returns, initial_investment=100.0)
@@ -192,3 +202,20 @@ def test_run_rebalance_scenarios_costs(cost_bps: float) -> None:
         assert total_cost > 0.0
         assert tracking_error > 0.0
         assert test_apy < zero_cost_apy
+
+
+def test_run_rebalance_scenarios_empty_returns() -> None:
+    empty_returns = pd.DataFrame()
+    weights = pd.Series(dtype=float)
+
+    result = run_rebalance_scenarios(
+        empty_returns,
+        weights,
+        {"base": RebalanceScenario(calendar=pd.DatetimeIndex([]))},
+        initial_nav=1.0,
+    )
+
+    assert isinstance(result, ScenarioRunResult)
+    assert result.metrics.empty
+    assert result.navs.empty
+    assert result.returns.empty

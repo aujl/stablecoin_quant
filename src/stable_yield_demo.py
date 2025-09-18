@@ -8,7 +8,9 @@ from typing import Any, cast
 
 import pandas as pd
 
-from stable_yield_lab import Metrics, Pipeline, Visualizer, performance, portfolio, risk_metrics
+from stable_yield_lab import Pipeline, Visualizer
+from stable_yield_lab.analytics import performance, portfolio, risk as risk_metrics
+from stable_yield_lab.analytics.metrics import Metrics
 from stable_yield_lab.core import PoolRepository
 from stable_yield_lab.sources import CSVSource, HistoricalCSVSource
 from stable_yield_lab.reporting import cross_section_report
@@ -131,6 +133,8 @@ def main() -> None:
         frontier = risk_metrics.efficient_frontier(returns)
     except Exception as exc:
         print(f"Skipping risk metrics: {exc}")
+        stats = None
+        frontier = None
 
     if outdir:
         outdir.mkdir(parents=True, exist_ok=True)

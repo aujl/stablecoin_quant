@@ -24,7 +24,8 @@ This guide demonstrates how to evaluate a small set of stablecoin pools using th
 >>> from pathlib import Path
 >>> from tempfile import TemporaryDirectory
 >>> import pandas as pd
->>> from stable_yield_lab import Visualizer, performance
+>>> from stable_yield_lab import Visualizer
+>>> from stable_yield_lab.analytics import performance
 >>> from stable_yield_lab.core import PoolRepository
 >>>
 >>> yields_df = pd.read_csv("src/sample_yields.csv", parse_dates=["timestamp"])
