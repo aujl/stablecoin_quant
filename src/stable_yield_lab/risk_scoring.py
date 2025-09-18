@@ -6,7 +6,7 @@ from dataclasses import replace
 from typing import Mapping, TYPE_CHECKING
 
 if TYPE_CHECKING:  # pragma: no cover - imported only for type checking
-    from .core.models import Pool
+    from stable_yield_lab.core import Pool
 
 # Simple reputation mapping per chain. Values range from 0 (unknown) to 1 (blue chip).
 CHAIN_REPUTATION: Mapping[str, float] = {

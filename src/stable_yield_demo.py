@@ -18,6 +18,7 @@ from stable_yield_lab import (
     portfolio,
     risk_metrics,
 )
+from stable_yield_lab.core import PoolRepository
 from stable_yield_lab.reporting import cross_section_report
 
 
@@ -97,11 +98,11 @@ def main() -> None:
     # Load data
     csv_path = cfg["csv"]["path"]
     src = CSVSource(path=csv_path)
-    repo = Pipeline([src]).run()
+    repo: PoolRepository = Pipeline([src]).run()
 
     # Apply filters
     f = cfg.get("filters", {})
-    filtered = repo.filter(
+    filtered: PoolRepository = repo.filter(
         min_tvl=float(f.get("min_tvl", 0.0)),
         min_base_apy=float(f.get("min_base_apy", 0.0)),
         auto_only=bool(f.get("auto_only", False)),

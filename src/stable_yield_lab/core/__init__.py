@@ -7,6 +7,7 @@ interface exposed in :mod:`stable_yield_lab.__init__`.
 
 from __future__ import annotations
 
+from .constants import STABLE_TOKENS
 from .models import Pool, PoolReturn
 from .repositories import PoolRepository, ReturnRepository
 
@@ -15,5 +16,6 @@ __all__ = [
     "PoolReturn",
     "PoolRepository",
     "ReturnRepository",
+    "STABLE_TOKENS",
 ]
 

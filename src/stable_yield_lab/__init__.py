@@ -21,8 +21,7 @@ import urllib.request
 import pandas as pd
 
 from . import attribution, performance, risk_scoring
-from .core.models import Pool, PoolReturn
-from .core.repositories import PoolRepository, ReturnRepository
+from .core import Pool, PoolRepository, PoolReturn, ReturnRepository, STABLE_TOKENS
 from .performance import cumulative_return, nav_series, nav_trajectories
 
 
@@ -95,29 +94,6 @@ class HistoricalCSVSource:
 
 
 logger = logging.getLogger(__name__)
-
-STABLE_TOKENS = {
-    "USDC",
-    "USDT",
-    "DAI",
-    "FRAX",
-    "LUSD",
-    "GUSD",
-    "TUSD",
-    "USDP",
-    "USDD",
-    "USDR",
-    "USDf",
-    "USDF",
-    "MAI",
-    "SUSD",
-    "EURS",
-    "EUROE",
-    "CRVUSD",
-    "GHO",
-    "USDC.E",
-    "USDT.E",
-}
 
 
 class DefiLlamaSource:

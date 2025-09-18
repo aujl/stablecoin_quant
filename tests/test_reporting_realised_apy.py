@@ -3,8 +3,7 @@ from pathlib import Path
 import pandas as pd
 
 from stable_yield_lab import HistoricalCSVSource, Pipeline
-from stable_yield_lab.core.models import Pool
-from stable_yield_lab.core.repositories import PoolRepository
+from stable_yield_lab.core import Pool, PoolRepository
 from stable_yield_lab.reporting import cross_section_report
 
 

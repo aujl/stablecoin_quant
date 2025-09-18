@@ -4,8 +4,9 @@ from pathlib import Path
 
 import pandas as pd
 
+from stable_yield_lab.core import PoolRepository
+
 from . import Metrics
-from .core.repositories import PoolRepository
 
 _RISK_COLUMNS = [
     "sharpe_ratio",
