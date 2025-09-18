@@ -8,12 +8,13 @@ from typing import Any, cast
 
 import pandas as pd
 
-from stable_yield_lab import Pipeline, Visualizer
+from stable_yield_lab import Pipeline
 from stable_yield_lab.analytics import performance, portfolio, risk as risk_metrics
 from stable_yield_lab.analytics.metrics import Metrics
 from stable_yield_lab.core import PoolRepository
 from stable_yield_lab.sources import CSVSource, HistoricalCSVSource
 from stable_yield_lab.reporting import cross_section_report
+from stable_yield_lab.visualization import Visualizer
 
 
 def load_config(path: str | Path | None) -> dict[str, Any]:
