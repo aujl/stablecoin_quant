@@ -34,17 +34,33 @@ runs:
   steps:
     - name: Submit Codex request comment
       uses: actions/github-script@v7
+      env:
+        COMMENT_BODY: ${{ inputs.comment-body }}
+        TRIGGER_TEXT: ${{ inputs.trigger-text }}
+        DEDUPE: ${{ inputs.dedupe }}
+        REQUIRE_EXISTING_COMMENT: ${{ inputs.require-existing-comment }}
+        EXISTING_COMMENT_QUERY: ${{ inputs.existing-comment-query }}
+        EXISTING_COMMENT_AUTHOR: ${{ inputs.existing-comment-author }}
       with:
         github-token: ${{ inputs.github-token }}
         result-encoding: string
         script: |
-          const commentBody = core.getInput('comment-body', { required: true });
-          const triggerText = core.getInput('trigger-text', { required: true });
-          const dedupe = core.getBooleanInput('dedupe');
-          const requireExisting = core.getBooleanInput('require-existing-comment');
-          const existingQueryInput = core.getInput('existing-comment-query');
-          const existingAuthor = core.getInput('existing-comment-author');
+          const commentBody = process.env.COMMENT_BODY;
+          const triggerText = process.env.TRIGGER_TEXT;
+          const dedupe = (process.env.DEDUPE || '').toLowerCase() === 'true';
+          const requireExisting = (process.env.REQUIRE_EXISTING_COMMENT || '').toLowerCase() === 'true';
+          const existingQueryInput = process.env.EXISTING_COMMENT_QUERY;
+          const existingAuthor = process.env.EXISTING_COMMENT_AUTHOR;
           const existingQuery = existingQueryInput || triggerText;
+
+          if (!commentBody) {
+            core.setFailed('No comment body provided.');
+            return;
+          }
+          if (!triggerText) {
+            core.setFailed('No trigger text provided.');
+            return;
+          }
 
           if (!context.issue?.number) {
             core.setFailed('No issue or pull request number available in the current context.');
@@ -92,9 +108,3 @@ runs:
           });
 
           core.info('Codex request comment created.');
-      comment-body: ${{ inputs.comment-body }}
-      trigger-text: ${{ inputs.trigger-text }}
-      dedupe: ${{ inputs.dedupe }}
-      require-existing-comment: ${{ inputs.require-existing-comment }}
-      existing-comment-query: ${{ inputs.existing-comment-query }}
-      existing-comment-author: ${{ inputs.existing-comment-author }}
