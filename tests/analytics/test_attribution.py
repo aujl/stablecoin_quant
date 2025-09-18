@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 import pandas as pd
 import pytest
 
-from stable_yield_lab import attribution
+from stable_yield_lab.analytics import attribution
 from stable_yield_lab.core import Pool, PoolRepository
 from stable_yield_lab.reporting import cross_section_report
 
@@ -59,24 +61,22 @@ def _synthetic_repo() -> PoolRepository:
 
 def test_compute_attribution_pool_and_window() -> None:
     returns = _synthetic_returns()
+    weights = _synthetic_weights(returns)
 
     result = attribution.compute_attribution(returns, weights, periods_per_year=52)
 
-    # Portfolio totals
     total_return = result.portfolio["total_return"]
     realized_apy = result.portfolio["realized_apy"]
     assert pytest.approx(total_return, rel=1e-6) == result.by_pool["return_contribution"].sum()
     assert pytest.approx(realized_apy, rel=1e-6) == result.by_pool["apy_contribution"].sum()
     assert pytest.approx(realized_apy, rel=1e-6) == result.by_window["apy_contribution"].sum()
 
-    # Pool level expectations
     pool = result.by_pool.set_index("pool")
     assert pool.index.tolist() == ["PoolA", "PoolB"]
     assert pytest.approx(pool.loc["PoolA", "avg_weight"], rel=1e-6) == 0.5
     assert pytest.approx(pool.loc["PoolB", "avg_weight"], rel=1e-6) == 0.5
     assert pool.loc["PoolA", "return_contribution"] > pool.loc["PoolB", "return_contribution"]
 
-    # Window structure
     window = result.by_window
     assert len(window) == 2
     assert window.loc[0, "periods"] == 2
@@ -86,7 +86,7 @@ def test_compute_attribution_pool_and_window() -> None:
     assert all(window["window_return"].abs() < 0.1)
 
 
-def test_cross_section_report_writes_attribution(tmp_path: pytest.TempPathFactory) -> None:
+def test_cross_section_report_writes_attribution(tmp_path: Path) -> None:
     repo = _synthetic_repo()
     returns = _synthetic_returns()
 
@@ -123,7 +123,6 @@ def test_cross_section_report_writes_attribution(tmp_path: pytest.TempPathFactor
     assert warnings_df.shape[0] == pools_df["name"].nunique()
     assert warnings_df["message"].str.contains("observations", case=False).all()
 
-    # Concentration output should include realised risk metrics for pools and aggregates
     required_metrics = {
         "scope",
         "hhi",

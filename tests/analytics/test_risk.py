@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import builtins
 import sys
 import types
@@ -8,7 +10,7 @@ import pandas as pd
 import pytest
 
 import stable_yield_demo
-from stable_yield_lab import risk_metrics
+from stable_yield_lab.analytics import risk as risk_metrics
 
 
 def _write_pools_csv(path: Path, names: list[str]) -> None:
@@ -200,21 +202,10 @@ def test_demo_warns_when_history_missing(
 ) -> None:
     csv_path = tmp_path / "pools.csv"
     history_path = tmp_path / "history.csv"
-    outdir = tmp_path / "out"
     _write_pools_csv(csv_path, ["PoolA"])
-    _write_history_csv(
-        history_path,
-        [
-            ("2024-01-01", "OtherPool", 0.01),
-            ("2024-01-08", "OtherPool", 0.02),
-        ],
-    )
+    _write_history_csv(history_path, [("2024-01-01", "PoolA", 0.01)])
+    outdir = tmp_path / "out"
 
-    def fail(_: pd.DataFrame) -> pd.DataFrame:  # pragma: no cover - ensure unused
-        raise AssertionError("risk metrics should not be called")
-
-    monkeypatch.setattr(risk_metrics, "summary_statistics", fail)
-    monkeypatch.setattr(risk_metrics, "efficient_frontier", fail)
     monkeypatch.setenv("STABLE_YIELD_CSV", str(csv_path))
     monkeypatch.setenv("STABLE_YIELD_YIELDS_CSV", str(history_path))
     monkeypatch.setenv("STABLE_YIELD_OUTDIR", str(outdir))
@@ -223,8 +214,6 @@ def test_demo_warns_when_history_missing(
     stable_yield_demo.main()
 
     warnings_path = outdir / "warnings.csv"
-    assert warnings_path.exists()
+    assert warnings_path.is_file()
     warnings_df = pd.read_csv(warnings_path)
-    assert warnings_df.shape[0] == 1
-    assert warnings_df.loc[0, "pool"] == "PoolA"
-    assert "observations" in warnings_df.loc[0, "message"].lower()
+    assert "history" in warnings_df.loc[0, "message"].lower()

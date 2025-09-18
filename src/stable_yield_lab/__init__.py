@@ -11,15 +11,15 @@ Design goals:
 
 from __future__ import annotations
 
-from collections.abc import Iterable
 from typing import Any, Mapping
 
 import logging
 import pandas as pd
 
-from . import attribution, performance, risk_scoring
+from . import analytics, risk_scoring
+from .analytics.metrics import Metrics
+from .analytics.performance import cumulative_return, nav_series, nav_trajectories
 from .core import Pool, PoolRepository, PoolReturn, ReturnRepository
-from .performance import cumulative_return, nav_series, nav_trajectories
 from .sources import (
     BeefySource,
     CSVSource,
@@ -45,119 +45,12 @@ logger = logging.getLogger(__name__)
 # Metrics & Analytics
 # -----------------
 
-
-class Metrics:
-    @staticmethod
-    def weighted_mean(values: list[float], weights: list[float]) -> float:
-        if not values or not weights or len(values) != len(weights):
-            return float("nan")
-        wsum = sum(weights)
-        return sum(v * w for v, w in zip(values, weights)) / wsum if wsum else float("nan")
-
-    @staticmethod
-    def portfolio_apr(pools: Iterable[Pool], weights: list[float] | None = None) -> float:
-        arr = list(pools)
-        if not arr:
-            return float("nan")
-        vals = [p.base_apy for p in arr]
-        if weights is None:
-            weights = [p.tvl_usd for p in arr]  # TVL-weighted by default
-        return Metrics.weighted_mean(vals, weights)
-
-    @staticmethod
-    def groupby_chain(repo: PoolRepository) -> pd.DataFrame:
-        df = repo.to_dataframe()
-        if df.empty:
-            return df
-        g = (
-            df.groupby("chain")
-            .agg(
-                pools=("name", "count"),
-                tvl=("tvl_usd", "sum"),
-                apr_avg=("base_apy", "mean"),
-                apr_wavg=(
-                    "base_apy",
-                    lambda x: (x * df.loc[x.index, "tvl_usd"]).sum()
-                    / df.loc[x.index, "tvl_usd"].sum(),
-                ),
-            )
-            .reset_index()
-        )
-        return g
-
-    @staticmethod
-    def top_n(repo: PoolRepository, n: int = 10, key: str = "base_apy") -> pd.DataFrame:
-        df = repo.to_dataframe()
-        if df.empty:
-            return df
-        return df.sort_values(key, ascending=False).head(n)
-
-    @staticmethod
-    def net_apy(
-        base_apy: float,
-        reward_apy: float = 0.0,
-        *,
-        perf_fee_bps: float = 0.0,
-        mgmt_fee_bps: float = 0.0,
-    ) -> float:
-        """Compute net APY after performance/management fees.
-
-        Fees are specified in basis points (1% = 100 bps) and reduce the gross
-        annual growth factor ``(1 + base_apy + reward_apy)``. The resulting
-        compounding return is clamped to a minimum of ``-100%`` to avoid values
-        below a total loss.
-        """
-        gross = float(base_apy) + float(reward_apy)
-        fee_frac = (perf_fee_bps + mgmt_fee_bps) / 10_000.0
-        net_growth = (1.0 + gross) * (1.0 - fee_frac)
-        return max(net_growth - 1.0, -1.0)
-
-    @staticmethod
-    def add_net_apy_column(
-        df: pd.DataFrame,
-        *,
-        perf_fee_bps: float = 0.0,
-        mgmt_fee_bps: float = 0.0,
-        out_col: str = "net_apy",
-    ) -> pd.DataFrame:
-        if df.empty:
-            return df
-        out = df.copy()
-        out[out_col] = [
-            Metrics.net_apy(
-                row.get("base_apy", 0.0),
-                row.get("reward_apy", 0.0),
-                perf_fee_bps=perf_fee_bps,
-                mgmt_fee_bps=mgmt_fee_bps,
-            )
-            for _, row in out.iterrows()
-        ]
-        return out
-
-    @staticmethod
-    def hhi(df: pd.DataFrame, value_col: str, group_col: str | None = None) -> pd.DataFrame:
-        """Compute Herfindahl–Hirschman Index of concentration.
-
-        - If `group_col` is None, returns a single-row DataFrame with HHI over the whole df.
-        - Otherwise, computes HHI within each group of `group_col`.
-        HHI = sum_i (share_i^2), where share is value / total within the scope.
-        """
-        if df.empty:
-            return df
-        if group_col is None:
-            total = df[value_col].sum()
-            if total == 0:
-                return pd.DataFrame({"hhi": [float("nan")]})
-            shares = (df[value_col] / total) ** 2
-            return pd.DataFrame({"hhi": [shares.sum()]})
-        else:
-
-            def _hhi(g: pd.Series) -> float:
-                tot = g.sum()
-                return float(((g / tot) ** 2).sum()) if tot else float("nan")
-
-            res = df.groupby(group_col)[value_col].apply(_hhi).reset_index(name="hhi")
-            return res
+metrics = analytics.metrics
+performance = analytics.performance
+portfolio = analytics.portfolio
+risk = analytics.risk
+risk_metrics = analytics.risk
+attribution = analytics.attribution
 
 
 # -----------------
@@ -375,7 +268,7 @@ class Visualizer:
         r"""Plot portfolio NAV alongside buy-and-hold and cash benchmarks.
 
         The rebalanced NAV :math:`\text{NAV}^{\text{rb}}_t` is computed via
-        :func:`stable_yield_lab.performance.nav_series`, which applies a
+        :func:`stable_yield_lab.analytics.performance.nav_series`, which applies a
         constant-weight rebalancing policy so that
 
         .. math::
@@ -539,6 +432,7 @@ class Pipeline:
 
 
 __all__ = [
+    "analytics",
     "Pool",
     "PoolRepository",
     "PoolReturn",
@@ -550,14 +444,16 @@ __all__ = [
     "MorphoSource",
     "BeefySource",
     "Metrics",
+    "metrics",
     "Visualizer",
     "Pipeline",
     "cumulative_return",
     "nav_series",
-    "risk_metrics",
-    "reporting",
-    "portfolio",
-    "risk_scoring",
     "performance",
+    "portfolio",
+    "risk",
+    "risk_metrics",
+    "risk_scoring",
     "attribution",
+    "reporting",
 ]

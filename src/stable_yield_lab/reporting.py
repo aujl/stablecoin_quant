@@ -6,7 +6,7 @@ import pandas as pd
 
 from stable_yield_lab.core import PoolRepository
 
-from . import Metrics
+from .analytics.metrics import Metrics
 
 _RISK_COLUMNS = [
     "sharpe_ratio",
@@ -205,7 +205,7 @@ def cross_section_report(
 
             if observations < min_required:
                 shortfall_text = (
-                    f"Only {min_required - 1} observations or fewer in lookback "
+                    f"Only {min_required - 1} observations or fewer in history lookback "
                     f"(available {observations}; minimum {min_required})"
                 )
                 if realised_apy_lookback_days is None or realised_apy_lookback_days <= 0:

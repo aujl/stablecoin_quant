@@ -23,7 +23,7 @@ handling logic.
 
 The deterministic generator lives in the task history (see this PR) and can be
 replayed with the project environment active: `poetry run python` followed by
-the snippet in `tests/test_performance.py::test_nav_and_yield_trajectories`.
+the snippet in `tests/analytics/test_performance.py::test_nav_and_yield_trajectories`.
 
 ## `src/sample_pools.csv` and `src/sample_pools_history.csv`
 
@@ -37,7 +37,7 @@ the snippet in `tests/test_performance.py::test_nav_and_yield_trajectories`.
   separately to make joins explicit in analytical notebooks.
 * Metrics were computed directly from the trailing 52 weeks of
   `sample_yields.csv` using the formulas implemented in
-  `tests/test_performance.py::test_sample_history_matches_expected_metrics`:
+  `tests/analytics/test_performance.py::test_sample_history_matches_expected_metrics`:
   
   \[
   R = \prod_{i=1}^n (1 + r_i) - 1,\qquad
