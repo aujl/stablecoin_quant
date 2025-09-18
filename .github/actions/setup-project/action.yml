@@ -56,4 +56,5 @@ runs:
           exit 1
         fi
         poetry --version
+
         poetry install ${{ inputs.install-args }}
