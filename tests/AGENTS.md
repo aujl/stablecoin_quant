@@ -2,6 +2,17 @@
 
 These instructions govern all tests under `tests/`.
 
+## Layout
+- `core/`: data model primitives and repository behaviours.
+- `sources/`: external data adapters and CSV loaders.
+- `analytics/`: metrics, attribution, portfolio, and risk scoring logic.
+- `visualization/`: Matplotlib-based rendering helpers.
+- `pipeline/`: end-to-end orchestration, historical data loading, and demo configuration.
+- `reporting/`: CSV report generation and realised APY enrichments.
+
+Each subdirectory ships with its own `AGENTS.md` describing fixtures, mocking expectations, and coverage targets.
+Follow those domain-specific instructions alongside the global practices below.
+
 ## Practices
 - Use `pytest` with files named `test_*.py`.
 - Write tests before implementation when possible.

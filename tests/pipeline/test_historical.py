@@ -8,7 +8,7 @@ from stable_yield_lab.sources import HistoricalCSVSource
 
 
 def test_historical_csv_parsing_and_alignment() -> None:
-    csv_path = Path(__file__).resolve().parent.parent / "src" / "sample_yields.csv"
+    csv_path = Path(__file__).resolve().parents[2] / "src" / "sample_yields.csv"
     src = HistoricalCSVSource(str(csv_path))
     df = Pipeline([src]).run_history()
 

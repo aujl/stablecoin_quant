@@ -9,7 +9,7 @@ from stable_yield_lab.sources import HistoricalCSVSource
 
 
 def test_cross_section_report_includes_realised_apy(tmp_path: Path) -> None:
-    yields_csv = Path(__file__).resolve().parent.parent / "src" / "sample_yields.csv"
+    yields_csv = Path(__file__).resolve().parents[2] / "src" / "sample_yields.csv"
 
     repo = PoolRepository(
         [
