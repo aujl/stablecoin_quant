@@ -14,7 +14,7 @@ from __future__ import annotations
 from collections.abc import Iterable
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any, Mapping, Protocol
 import json
 import logging
 import urllib.request
@@ -23,7 +23,7 @@ import pandas as pd
 from . import attribution, performance, risk_scoring
 from .core.models import Pool, PoolReturn
 from .core.repositories import PoolRepository, ReturnRepository
-from .performance import cumulative_return, nav_series
+from .performance import cumulative_return, nav_series, nav_trajectories
 
 
 # -----------------
@@ -621,6 +621,106 @@ class Visualizer:
             plt.savefig(save_path, bbox_inches="tight")
         if show:
             plt.show()
+
+    @staticmethod
+    def nav_with_benchmarks(
+        returns: pd.DataFrame,
+        initial_investment: float,
+        cash_returns: float | pd.Series | None = None,
+        *,
+        labels: Mapping[str, str] | None = None,
+        save_path: str | None = None,
+        show: bool = True,
+    ) -> pd.DataFrame:
+        r"""Plot portfolio NAV alongside buy-and-hold and cash benchmarks.
+
+        The rebalanced NAV :math:`\text{NAV}^{\text{rb}}_t` is computed via
+        :func:`stable_yield_lab.performance.nav_series`, which applies a
+        constant-weight rebalancing policy so that
+
+        .. math::
+           \text{NAV}^{\text{rb}}_t = \text{NAV}_{t-1} \Bigl(1 + \sum_i w_i r_{i,t}\Bigr).
+
+        A buy-and-hold benchmark allocates the initial investment equally
+        across assets once and compounds each asset independently before
+        summing the trajectories. The cash benchmark grows at the supplied
+        periodic rate ``cash_returns``.
+
+        Parameters
+        ----------
+        returns:
+            DataFrame of periodic simple returns (decimal form) indexed by
+            timestamp.
+        initial_investment:
+            Starting portfolio value.
+        cash_returns:
+            Optional periodic simple return for the cash benchmark. A scalar
+            applies the same rate each period; a Series is aligned to
+            ``returns.index``.
+        labels:
+            Optional mapping overriding the display labels for
+            ``{"rebalance", "buy_and_hold", "cash"}``.
+        save_path:
+            Optional file path used when persisting the generated figure.
+        show:
+            Display the plot window when ``True``.
+
+        Returns
+        -------
+        pandas.DataFrame
+            DataFrame containing the three NAV paths.
+        """
+
+        clean_returns = returns.fillna(0.0)
+        index = clean_returns.index
+
+        rebalanced_nav = nav_series(clean_returns, initial=float(initial_investment)).rename(
+            "rebalance"
+        )
+
+        if clean_returns.shape[1] == 0:
+            buy_and_hold_nav = pd.Series(index=index, dtype=float, name="buy_and_hold")
+        else:
+            num_assets = clean_returns.shape[1]
+            per_asset_initial = float(initial_investment) / num_assets
+            asset_navs = nav_trajectories(
+                clean_returns,
+                initial_investment=per_asset_initial,
+            )
+            buy_and_hold_nav = asset_navs.sum(axis=1).rename("buy_and_hold")
+
+        if isinstance(cash_returns, pd.Series):
+            cash_rate = cash_returns.reindex(index, fill_value=0.0)
+        elif cash_returns is None:
+            cash_rate = pd.Series(0.0, index=index)
+        else:
+            cash_rate = pd.Series(float(cash_returns), index=index)
+
+        cash_nav = nav_series(cash_rate.to_frame(name="cash"), initial=float(initial_investment)).rename(
+            "cash"
+        )
+
+        nav_df = pd.concat([rebalanced_nav, buy_and_hold_nav, cash_nav], axis=1)
+
+        default_labels = {
+            "rebalance": "Rebalanced NAV",
+            "buy_and_hold": "Buy & Hold",
+            "cash": "Cash Benchmark",
+        }
+        if labels:
+            default_labels.update(labels)
+        rename_map = {col: default_labels.get(col, col) for col in nav_df.columns}
+        nav_df = nav_df.rename(columns=rename_map)
+
+        Visualizer.line_chart(
+            nav_df,
+            title="Portfolio NAV vs Benchmarks",
+            ylabel="Net Asset Value",
+            save_path=save_path,
+            show=show,
+        )
+
+        return nav_df
 
     @staticmethod
     def line_chart(
