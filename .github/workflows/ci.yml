@@ -15,6 +15,9 @@ permissions:
 
 jobs:
   lint:
+    # Grant write access so the reusable pre-commit workflow can push auto-fixes on internal branches.
+    permissions:
+      contents: write
     uses: ./.github/workflows/pre-commit.yml
     with:
       python-version: '3.12'
