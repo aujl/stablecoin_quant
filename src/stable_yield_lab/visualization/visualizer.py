@@ -232,9 +232,9 @@ class Visualizer:
         else:
             cash_rate = pd.Series(float(cash_returns), index=index)
 
-        cash_nav = nav_series(cash_rate.to_frame(name="cash"), initial=float(initial_investment)).rename(
-            "cash"
-        )
+        cash_nav = nav_series(
+            cash_rate.to_frame(name="cash"), initial=float(initial_investment)
+        ).rename("cash")
 
         nav_df = pd.concat([rebalanced_nav, buy_and_hold_nav, cash_nav], axis=1)
 

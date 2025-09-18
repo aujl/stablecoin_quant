@@ -132,8 +132,10 @@ def tracking_error(
     if portfolio_returns.empty:
         return float("nan"), float("nan")
 
-    benchmark = float(target_periodic_return) if target_periodic_return is not None else float(
-        portfolio_returns.mean()
+    benchmark = (
+        float(target_periodic_return)
+        if target_periodic_return is not None
+        else float(portfolio_returns.mean())
     )
     active = portfolio_returns - benchmark
     active = active.dropna()

@@ -95,5 +95,7 @@ def test_hhi_zero_total_returns_nan() -> None:
     result = hhi(df, value_col="value")
     assert math.isnan(result.loc[0, "hhi"])
 
-    grouped = hhi(pd.DataFrame({"value": [0.0], "group": ["A"]}), value_col="value", group_col="group")
+    grouped = hhi(
+        pd.DataFrame({"value": [0.0], "group": ["A"]}), value_col="value", group_col="group"
+    )
     assert math.isnan(grouped.loc[0, "hhi"])

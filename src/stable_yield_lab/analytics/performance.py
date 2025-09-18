@@ -131,7 +131,6 @@ def nav_trajectories(returns: pd.DataFrame, *, initial_investment: float) -> pd.
     if returns.empty:
         return returns.copy()
 
-
     growth = (1.0 + returns.fillna(0.0)).cumprod()
     return growth * float(initial_investment)
 
@@ -312,7 +311,9 @@ def run_rebalance_scenarios(
     if returns.empty:
         empty = pd.DataFrame(index=returns.index)
         return ScenarioRunResult(
-            metrics=pd.DataFrame(columns=["realized_apy", "total_cost", "tracking_error", "terminal_nav"]),
+            metrics=pd.DataFrame(
+                columns=["realized_apy", "total_cost", "tracking_error", "terminal_nav"]
+            ),
             navs=empty,
             returns=empty,
         )

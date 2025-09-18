@@ -69,10 +69,7 @@ class ReturnRepository:
             return pd.DataFrame()
         df = pd.DataFrame([row.to_dict() for row in self._rows])
         df["timestamp"] = pd.to_datetime(df["timestamp"], utc=True)
-        return (
-            df.pivot(index="timestamp", columns="name", values="period_return").sort_index()
-        )
+        return df.pivot(index="timestamp", columns="name", values="period_return").sort_index()
 
 
 __all__ = ["PoolRepository", "ReturnRepository"]
-

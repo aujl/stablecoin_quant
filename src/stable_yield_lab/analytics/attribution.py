@@ -152,7 +152,10 @@ def compute_attribution(
             "periods_per_year": periods_per_year or float("nan"),
         }
         return AttributionResult(
-            portfolio=portfolio, by_pool=empty, by_window=windows, period_returns=pd.Series(dtype=float)
+            portfolio=portfolio,
+            by_pool=empty,
+            by_window=windows,
+            period_returns=pd.Series(dtype=float),
         )
 
     initial_value = float(initial_nav)
@@ -165,7 +168,9 @@ def compute_attribution(
         if not columns:
             raise ValueError("returns must contain columns when weight_schedule is None")
         weight_schedule = pd.Series(1.0 / len(columns), index=columns)
-    aligned_weights, window_labels = _prepare_weight_schedule(weight_schedule, returns_index, columns)
+    aligned_weights, window_labels = _prepare_weight_schedule(
+        weight_schedule, returns_index, columns
+    )
 
     weight_sums = aligned_weights.sum(axis=1)
     if (weight_sums <= 0).any():

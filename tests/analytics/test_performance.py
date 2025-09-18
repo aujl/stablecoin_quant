@@ -12,7 +12,6 @@ from stable_yield_lab.analytics.performance import (
     ScenarioRunResult,
     cumulative_return,
     nav_series,
-    nav_trajectories,
     run_rebalance_scenarios,
 )
 from stable_yield_lab.sources import HistoricalCSVSource
@@ -112,7 +111,9 @@ def test_nav_series_aligns_and_validates_weights() -> None:
 
     aligned = weights.reindex(returns.columns).fillna(0.0)
     expected_weights = aligned / aligned.sum()
-    expected_nav = 50.0 * (1.0 + returns.fillna(0.0).mul(expected_weights, axis=1).sum(axis=1)).cumprod()
+    expected_nav = (
+        50.0 * (1.0 + returns.fillna(0.0).mul(expected_weights, axis=1).sum(axis=1)).cumprod()
+    )
     pd.testing.assert_series_equal(result, expected_nav)
 
     with pytest.raises(ValueError):

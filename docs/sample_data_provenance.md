@@ -38,13 +38,13 @@ the snippet in `tests/analytics/test_performance.py::test_nav_and_yield_trajecto
 * Metrics were computed directly from the trailing 52 weeks of
   `sample_yields.csv` using the formulas implemented in
   `tests/analytics/test_performance.py::test_sample_history_matches_expected_metrics`:
-  
+
   \[
   R = \prod_{i=1}^n (1 + r_i) - 1,\qquad
   \text{APY} = (1 + R)^{52/n} - 1,\qquad
   \sigma = \operatorname{stdev}(r_i) \sqrt{52}
   \]
-  
+
   Maximum drawdown is measured on the cumulative NAV curve derived from the
   weekly returns.
 

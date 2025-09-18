@@ -13,11 +13,17 @@ concurrency:
 jobs:
   build-test:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    outputs:
+      precommit_autofix: ${{ steps.precommit.outputs.needs_autofix }}
     env:
       DEMO_OUTDIR: demo_artifacts
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'pull_request' && github.head_ref || github.ref }}
 
       - name: Install Poetry
         uses: snok/install-poetry@v1
@@ -42,9 +48,43 @@ jobs:
           poetry install --with dev --no-interaction
 
       - name: Run pre-commit
-        run: poetry run pre-commit run --color=always --show-diff-on-failure --all-files
+        id: precommit
+        run: |
+          set -eo pipefail
+          set +e
+          poetry run pre-commit run --color=always --show-diff-on-failure --all-files
+          exit_code=$?
+          set -e
+          echo "exit_code=${exit_code}" >>"${GITHUB_OUTPUT}"
+          if [ "${exit_code}" -eq 0 ]; then
+            echo "needs_autofix=false" >>"${GITHUB_OUTPUT}"
+            exit 0
+          fi
+
+          if git diff --quiet; then
+            echo "needs_autofix=false" >>"${GITHUB_OUTPUT}"
+            exit "${exit_code}"
+          fi
+
+          echo "needs_autofix=true" >>"${GITHUB_OUTPUT}"
+
+      - name: Auto-commit pre-commit fixes
+        if: steps.precommit.outputs.needs_autofix == 'true' && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+        uses: stefanzweifel/git-auto-commit-action@v5
+        with:
+          commit_message: "style: apply pre-commit auto-fixes"
+          branch: ${{ github.head_ref }}
+          skip_checkout: true
+
+      - name: Fail if pre-commit fixes cannot be applied automatically
+        if: steps.precommit.outputs.needs_autofix == 'true' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository)
+        run: |
+          echo '::error::pre-commit hooks modified files but CI could not push the fixes automatically.'
+          echo '::error::Please run "poetry run pre-commit run --all-files" locally and push the resulting changes.'
+          exit 1
 
       - name: Run headless demo (config-driven)
+        if: steps.precommit.outputs.needs_autofix != 'true'
         env:
           MPLBACKEND: Agg
           STABLE_YIELD_OUTDIR: ${{ env.DEMO_OUTDIR }}
@@ -74,6 +114,7 @@ jobs:
           test -s "${STABLE_YIELD_OUTDIR}/nav_vs_time.png"
 
       - name: Upload demo artifacts
+        if: steps.precommit.outputs.needs_autofix != 'true'
         uses: actions/upload-artifact@v4
         with:
           name: demo-artifacts
@@ -81,10 +122,12 @@ jobs:
           if-no-files-found: error
 
       - name: Run tests with coverage
+        if: steps.precommit.outputs.needs_autofix != 'true'
         run: |
           poetry run pytest --cov=stable_yield_lab --cov-report=xml --cov-report=html --cov-report=term-missing
 
       - name: Prepare coverage site artifact
+        if: steps.precommit.outputs.needs_autofix != 'true'
         run: |
           poetry run python - <<'PY'
             import json
@@ -138,26 +181,28 @@ jobs:
           HTML
 
       - name: Upload coverage artifact
+        if: steps.precommit.outputs.needs_autofix != 'true'
         uses: actions/upload-artifact@v4
         with:
           name: coverage-xml
           path: coverage.xml
 
       - name: Upload HTML coverage artifact
+        if: steps.precommit.outputs.needs_autofix != 'true'
         uses: actions/upload-artifact@v4
         with:
           name: coverage-html
           path: coverage-site/report
 
       - name: Upload coverage site for Pages
-        if: github.event_name == 'push'
+        if: steps.precommit.outputs.needs_autofix != 'true' && github.event_name == 'push'
         uses: actions/upload-pages-artifact@v3
         with:
           path: coverage-site
 
   deploy-coverage:
     needs: build-test
-    if: github.event_name == 'push' && startsWith(github.ref, 'refs/heads/') && github.ref != 'refs/heads/gh-pages'
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/heads/') && github.ref != 'refs/heads/gh-pages' && needs.build-test.outputs.precommit_autofix != 'true'
     runs-on: ubuntu-latest
     permissions:
       pages: write
