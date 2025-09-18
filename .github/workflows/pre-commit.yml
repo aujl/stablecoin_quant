@@ -8,6 +8,21 @@ on:
         required: false
         type: string
         default: "3.12"
+      poetry-version:
+        description: "Poetry version to install when restoring a cached environment"
+        required: false
+        type: string
+        default: "1.8.4"
+      environment-artifact:
+        description: "Name of the cached Poetry environment artifact to restore"
+        required: false
+        type: string
+        default: ""
+      artifacts-dir:
+        description: "Directory where the cached environment artifact is downloaded"
+        required: false
+        type: string
+        default: "artifacts"
     outputs:
       needs-autofix:
         description: "Whether pre-commit applied fixes"
@@ -27,7 +42,23 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Set up project environment
+      - name: Download cached environment
+        if: inputs.environment-artifact != ''
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.environment-artifact }}
+          path: ${{ inputs.artifacts-dir }}
+
+      - name: Restore cached Poetry environment
+        if: inputs.environment-artifact != ''
+        uses: ./.github/actions/restore-environment
+        with:
+          python-version: ${{ inputs.python-version }}
+          poetry-version: ${{ inputs.poetry-version }}
+          artifacts-dir: ${{ inputs.artifacts-dir }}
+
+      - name: Set up project environment (fallback)
+        if: inputs.environment-artifact == ''
         uses: ./.github/actions/setup-project
         with:
           python-version: ${{ inputs.python-version }}

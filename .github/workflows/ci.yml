@@ -14,31 +14,49 @@ permissions:
   contents: read
 
 jobs:
+  prepare-environment:
+    name: Prepare cached Poetry environment
+    uses: ./.github/workflows/setup-environment.yml
+    with:
+      python-version: '3.12'
+      poetry-version: '1.8.4'
+      artifacts-dir: 'artifacts'
+
   lint:
     # Grant write access so the reusable pre-commit workflow can push auto-fixes on internal branches.
     permissions:
       contents: write
+    needs: prepare-environment
     uses: ./.github/workflows/pre-commit.yml
     with:
       python-version: '3.12'
+      environment-artifact: ${{ needs.prepare-environment.outputs.environment-artifact }}
+      artifacts-dir: ${{ needs.prepare-environment.outputs.artifacts-dir }}
+      poetry-version: '1.8.4'
 
   demo:
-    needs: lint
+    needs: [prepare-environment, lint]
     if: needs.lint.outputs.needs-autofix != 'true'
     uses: ./.github/workflows/demo.yml
     with:
       python-version: '3.12'
       artifact-name: demo-artifacts
       demo-outdir: demo_artifacts
+      environment-artifact: ${{ needs.prepare-environment.outputs.environment-artifact }}
+      artifacts-dir: ${{ needs.prepare-environment.outputs.artifacts-dir }}
+      poetry-version: '1.8.4'
 
   tests:
-    needs: lint
+    needs: [prepare-environment, lint]
     if: needs.lint.outputs.needs-autofix != 'true'
     uses: ./.github/workflows/tests.yml
     with:
       python-version: '3.12'
       coverage-xml-artifact: coverage-xml
       coverage-html-artifact: coverage-html
+      environment-artifact: ${{ needs.prepare-environment.outputs.environment-artifact }}
+      artifacts-dir: ${{ needs.prepare-environment.outputs.artifacts-dir }}
+      poetry-version: '1.8.4'
 
   deploy-coverage:
     needs: tests
