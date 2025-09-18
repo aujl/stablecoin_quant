@@ -62,9 +62,9 @@ runs:
       shell: bash
       run: |
         set -euo pipefail
-        poetry config virtualenvs.create true --global
-        poetry config virtualenvs.in-project true --global
-        poetry config installer.parallel true --global
+        poetry config virtualenvs.create true
+        poetry config virtualenvs.in-project true
+        poetry config installer.parallel true
     - name: "Install dependencies"
       working-directory: ${{ inputs.working-directory }}
       shell: bash
