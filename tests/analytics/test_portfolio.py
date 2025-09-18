@@ -225,7 +225,9 @@ def _returns_from_fixture(raw_returns: Iterable[dict[str, object]]) -> pd.DataFr
     return frame.astype(float).set_index(index)
 
 
-def _schedule_from_fixture(raw_schedule: Iterable[dict[str, object]]) -> list[tuple[pd.Timestamp, pd.Series]]:
+def _schedule_from_fixture(
+    raw_schedule: Iterable[dict[str, object]],
+) -> list[tuple[pd.Timestamp, pd.Series]]:
     schedule: list[tuple[pd.Timestamp, pd.Series]] = []
     for entry in raw_schedule:
         ts = pd.Timestamp(entry["date"], tz="UTC")
@@ -252,7 +254,9 @@ def _simulate_nav_with_schedule(
             mask = returns.index >= start
         segment = returns.loc[mask]
         if segment.empty:
-            raise ValueError(f"no return observations available for rebalance at {start.isoformat()}")
+            raise ValueError(
+                f"no return observations available for rebalance at {start.isoformat()}"
+            )
         nav_segment = nav_series(segment, weights, initial=current_nav)
         nav_paths.append(nav_segment)
         current_nav = float(nav_segment.iloc[-1])

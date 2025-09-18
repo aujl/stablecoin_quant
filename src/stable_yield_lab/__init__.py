@@ -14,7 +14,7 @@ from __future__ import annotations
 from . import analytics, risk_scoring, visualization
 from . import reporting as reporting_module
 from .analytics.metrics import Metrics
-from .analytics.performance import cumulative_return, nav_series, nav_trajectories
+from .analytics.performance import cumulative_return, nav_series
 from .core import Pool, PoolRepository, PoolReturn, ReturnRepository
 from .pipeline import Pipeline
 from .sources import (

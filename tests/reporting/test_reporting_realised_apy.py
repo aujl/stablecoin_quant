@@ -13,7 +13,9 @@ def test_cross_section_report_includes_realised_apy(tmp_path: Path) -> None:
 
     repo = PoolRepository(
         [
-            Pool(name="PoolA", chain="Ethereum", stablecoin="USDC", tvl_usd=1_000_000, base_apy=0.08),
+            Pool(
+                name="PoolA", chain="Ethereum", stablecoin="USDC", tvl_usd=1_000_000, base_apy=0.08
+            ),
             Pool(name="PoolB", chain="Ethereum", stablecoin="USDT", tvl_usd=500_000, base_apy=0.07),
         ]
     )
@@ -29,7 +31,9 @@ def test_cross_section_report_includes_realised_apy(tmp_path: Path) -> None:
     )
 
     pools_df = pd.read_csv(paths["pools"])
-    assert {"realised_apy", "realised_apy_observations", "realised_apy_warning"}.issubset(pools_df.columns)
+    assert {"realised_apy", "realised_apy_observations", "realised_apy_warning"}.issubset(
+        pools_df.columns
+    )
     assert pools_df["realised_apy"].isna().all()
     warning_text = pools_df["realised_apy_warning"].fillna("")
     assert (warning_text.str.contains("Only 2 observations")).all()

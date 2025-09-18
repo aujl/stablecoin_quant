@@ -172,7 +172,9 @@ def cross_section_report(
     metrics_index = pd.Index(df["name"], name="name") if not df.empty else pd.Index([], name="name")
     realised_metrics = pd.DataFrame(index=metrics_index)
     realised_metrics["realised_apy"] = pd.Series(float("nan"), index=metrics_index, dtype=float)
-    realised_metrics["realised_apy_observations"] = pd.Series(pd.NA, index=metrics_index, dtype="Int64")
+    realised_metrics["realised_apy_observations"] = pd.Series(
+        pd.NA, index=metrics_index, dtype="Int64"
+    )
     realised_metrics["realised_apy_warning"] = pd.Series(pd.NA, index=metrics_index, dtype="string")
     warnings_records: list[dict[str, object]] = []
 
@@ -188,7 +190,11 @@ def cross_section_report(
         returns_df = returns_df.reindex(columns=metrics_index)
         returns_df = returns_df.dropna(how="all")
 
-        if realised_apy_lookback_days is not None and realised_apy_lookback_days > 0 and not returns_df.empty:
+        if (
+            realised_apy_lookback_days is not None
+            and realised_apy_lookback_days > 0
+            and not returns_df.empty
+        ):
             cutoff = returns_df.index.max() - pd.Timedelta(days=int(realised_apy_lookback_days))
             returns_df = returns_df.loc[returns_df.index >= cutoff]
             returns_df = returns_df.dropna(how="all")

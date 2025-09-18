@@ -126,7 +126,9 @@ def main() -> None:
 
     # Risk metrics derived from time-series returns
     returns = (
-        returns_ts if returns_ts is not None else df.pivot_table(index="timestamp", columns="name", values="base_apy")
+        returns_ts
+        if returns_ts is not None
+        else df.pivot_table(index="timestamp", columns="name", values="base_apy")
     )
     stats = frontier = None
     try:
@@ -185,6 +187,7 @@ def main() -> None:
         portfolio_nav = None
 
         if not returns_ts.empty and returns_ts.shape[1] > 0:
+
             def _infer_periods_per_year(index: pd.Index) -> int:
                 if len(index) < 2:
                     return 52

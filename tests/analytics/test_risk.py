@@ -197,9 +197,7 @@ def test_demo_uses_realised_returns_for_risk_metrics(
     pd.testing.assert_frame_equal(actual, expected)
 
 
-def test_demo_warns_when_history_missing(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_demo_warns_when_history_missing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     csv_path = tmp_path / "pools.csv"
     history_path = tmp_path / "history.csv"
     _write_pools_csv(csv_path, ["PoolA"])

@@ -18,4 +18,3 @@ __all__ = [
     "ReturnRepository",
     "STABLE_TOKENS",
 ]
-
