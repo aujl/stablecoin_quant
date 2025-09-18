@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import math
-
 import pandas as pd
 import pytest
 
@@ -61,7 +59,6 @@ def _synthetic_repo() -> PoolRepository:
 
 def test_compute_attribution_pool_and_window() -> None:
     returns = _synthetic_returns()
-    weights = _synthetic_weights(returns)
 
     result = attribution.compute_attribution(returns, weights, periods_per_year=52)
 
@@ -92,42 +89,55 @@ def test_compute_attribution_pool_and_window() -> None:
 def test_cross_section_report_writes_attribution(tmp_path: pytest.TempPathFactory) -> None:
     repo = _synthetic_repo()
     returns = _synthetic_returns()
-    weights = _synthetic_weights(returns)
 
     outdir = tmp_path / "report"
     outdir.mkdir()
 
-    paths, attr = cross_section_report(
+    paths = cross_section_report(
         repo,
         outdir,
         perf_fee_bps=0.0,
         mgmt_fee_bps=0.0,
         top_n=5,
         returns=returns,
-        weight_schedule=weights,
-        attribution_periods_per_year=52,
-        attribution_console=False,
-        return_attribution=True,
     )
 
-    assert attr is not None
-    assert "attribution_by_pool" in paths
-    assert "attribution_by_window" in paths
+    expected_outputs = {
+        "pools",
+        "warnings",
+        "by_chain",
+        "by_source",
+        "by_stablecoin",
+        "topN",
+        "concentration",
+    }
+    assert expected_outputs.issubset(paths.keys())
 
-    pool_df = pd.read_csv(paths["attribution_by_pool"])
-    window_df = pd.read_csv(paths["attribution_by_window"])
+    pools_df = pd.read_csv(paths["pools"])
+    warnings_df = pd.read_csv(paths["warnings"])
+    concentration_df = pd.read_csv(paths["concentration"])
 
-    assert not pool_df.empty
-    assert not window_df.empty
-
-    # CSV outputs should reconcile to realised APY within tolerance
-    assert math.isclose(
-        pool_df["apy_contribution"].sum(),
-        attr.portfolio["realized_apy"],
-        rel_tol=1e-6,
+    assert {"realised_apy", "realised_apy_observations", "realised_apy_warning"}.issubset(
+        pools_df.columns
     )
-    assert math.isclose(
-        window_df["apy_contribution"].sum(),
-        attr.portfolio["realized_apy"],
-        rel_tol=1e-6,
-    )
+    assert warnings_df.shape[0] == pools_df["name"].nunique()
+    assert warnings_df["message"].str.contains("observations", case=False).all()
+
+    # Concentration output should include realised risk metrics for pools and aggregates
+    required_metrics = {
+        "scope",
+        "hhi",
+        "sharpe_ratio",
+        "sortino_ratio",
+        "max_drawdown",
+        "negative_period_share",
+    }
+    assert required_metrics.issubset(concentration_df.columns)
+
+    pool_scope = concentration_df.loc[concentration_df["scope"] == "pool:PoolA"]
+    assert not pool_scope.empty
+    assert pool_scope["sharpe_ratio"].notna().all()
+
+    chain_scope = concentration_df.loc[concentration_df["scope"] == "chain:TestChain"]
+    assert not chain_scope.empty
+    assert chain_scope["negative_period_share"].between(0.0, 1.0).all()

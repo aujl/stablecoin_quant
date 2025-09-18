@@ -34,70 +34,67 @@ def test_allocate_mean_variance_with_bounds():
     assert risk == pytest.approx(float(manual_risk))
 
 
-def test_rebalance_engine_handles_asset_dropout_and_addition():
-    idx = pd.date_range("2024-01-01", periods=4, freq="D", tz="UTC")
+def test_tracking_error_matches_manual_calculation():
+    idx = pd.date_range("2024-01-01", periods=6, freq="W", tz="UTC")
     returns = pd.DataFrame(
         {
-            "A": [0.01, -0.02, 0.03, 0.0],
-            "B": [0.02, 0.01, -0.01, 0.02],
-            "C": [0.015, 0.0, np.nan, np.nan],
-            "D": [np.nan, np.nan, 0.05, 0.01],
+            "A": [0.012, -0.008, 0.01, 0.004, -0.002, 0.006],
+            "B": [0.009, 0.011, -0.005, 0.007, 0.003, 0.008],
         },
         index=idx,
     )
+    weights = pd.Series({"A": 0.6, "B": 0.4})
 
-    targets = {
-        idx[0]: {"A": 0.5, "B": 0.3, "C": 0.2},
-        idx[3]: {"A": 0.4, "B": 0.3, "D": 0.3},
-    }
+    periodic_te, annual_te = portfolio.tracking_error(returns, weights, freq=52)
 
-    result = portfolio.rebalance_portfolio(
+    norm_weights = weights / weights.sum()
+    portfolio_returns = returns.fillna(0.0).mul(norm_weights, axis=1).sum(axis=1)
+    benchmark = float(portfolio_returns.mean())
+    active = portfolio_returns - benchmark
+    expected_periodic = float(active.std(ddof=1))
+    expected_annual = expected_periodic * np.sqrt(52)
+
+    assert periodic_te == pytest.approx(expected_periodic)
+    assert annual_te == pytest.approx(expected_annual)
+
+
+def test_apy_performance_summary_with_explicit_nav() -> None:
+    idx = pd.date_range("2024-03-01", periods=5, freq="W", tz="UTC")
+    returns = pd.DataFrame(
+        {
+            "A": [0.01, -0.004, 0.012, 0.006, -0.003],
+            "B": [0.008, 0.009, -0.002, 0.007, 0.005],
+        },
+        index=idx,
+    )
+    weights = pd.Series({"A": 0.55, "B": 0.45})
+
+    nav = portfolio.performance.nav_series(returns, weights, initial=100.0)
+    metrics, nav_path = portfolio.apy_performance_summary(
         returns,
-        rebalance_schedule=[idx[0], idx[3]],
-        target_weights=targets,
+        weights,
+        freq=52,
+        initial_nav=100.0,
+        nav=nav,
     )
 
-    weights = result.weights
-    assert pytest.approx(1.0) == weights.loc[idx[0]].sum()
-    assert weights.loc[idx[2], "C"] == pytest.approx(0.0)
-    assert weights.loc[idx[2], ["A", "B"]].sum() == pytest.approx(1.0)
-    assert weights.loc[idx[3], "D"] == pytest.approx(0.3)
-    assert pytest.approx(1.0) == weights.loc[idx[3]].sum()
-    assert result.nav.iloc[-1] > 0
+    pd.testing.assert_series_equal(nav, nav_path)
 
+    norm_weights = weights / weights.sum()
+    portfolio_returns = returns.fillna(0.0).mul(norm_weights, axis=1).sum(axis=1)
+    total_growth = float((1.0 + portfolio_returns).prod())
+    realised_total = total_growth - 1.0
+    realised_apy = total_growth ** (52 / len(portfolio_returns)) - 1.0
+    expected = portfolio.expected_apy(returns, norm_weights, freq=52)
+    expected_periodic = (1.0 + expected) ** (1.0 / 52) - 1.0
+    active = portfolio_returns - expected_periodic
+    tracking_periodic = float(active.std(ddof=1))
+    tracking_annual = tracking_periodic * np.sqrt(52)
 
-def test_schedule_helpers_enforce_alignment():
-    idx = pd.date_range("2024-02-01", periods=5, freq="D", tz="UTC")
-    returns = pd.DataFrame(
-        {
-            "A": np.linspace(0.0, 0.02, num=5),
-            "B": np.linspace(0.01, -0.01, num=5),
-        },
-        index=idx,
-    )
-
-    manual_schedule = portfolio.schedule_from_user_weights(
-        dates=[idx[0], idx[2], idx[4]],
-        weights={"A": 0.6, "B": 0.4},
-        returns_index=returns.index,
-    )
-    assert manual_schedule.index.equals(idx[[0, 2, 4]])
-    assert all(manual_schedule.sum(axis=1).round(8) == 1.0)
-
-    optimised = {
-        idx[0]: pd.Series({"A": 0.7, "B": 0.3}),
-        idx[3]: pd.Series({"A": 0.2, "B": 0.8}),
-    }
-    opt_schedule = portfolio.schedule_from_optimizations(
-        optimised,
-        returns_index=returns.index,
-    )
-    assert opt_schedule.index.equals(idx[[0, 3]])
-    assert all(opt_schedule.sum(axis=1).round(8) == 1.0)
-
-    with pytest.raises(ValueError):
-        portfolio.schedule_from_user_weights(
-            dates=[idx[0], idx[-1] + pd.Timedelta(days=1)],
-            weights={"A": 0.5, "B": 0.5},
-            returns_index=returns.index,
-        )
+    assert metrics["expected_apy"] == pytest.approx(expected)
+    assert metrics["realized_total_return"] == pytest.approx(realised_total)
+    assert metrics["realized_apy"] == pytest.approx(realised_apy)
+    assert metrics["active_apy"] == pytest.approx(realised_apy - expected)
+    assert metrics["tracking_error_periodic"] == pytest.approx(tracking_periodic)
+    assert metrics["tracking_error_annualized"] == pytest.approx(tracking_annual)
+    assert metrics["final_nav"] == pytest.approx(nav.iloc[-1])

@@ -220,5 +220,11 @@ def test_demo_warns_when_history_missing(
     monkeypatch.setenv("STABLE_YIELD_OUTDIR", str(outdir))
     monkeypatch.setattr(sys, "argv", ["prog"])
 
-    with pytest.warns(UserWarning, match="No historical returns matched the filtered pools"):
-        stable_yield_demo.main()
+    stable_yield_demo.main()
+
+    warnings_path = outdir / "warnings.csv"
+    assert warnings_path.exists()
+    warnings_df = pd.read_csv(warnings_path)
+    assert warnings_df.shape[0] == 1
+    assert warnings_df.loc[0, "pool"] == "PoolA"
+    assert "observations" in warnings_df.loc[0, "message"].lower()
