@@ -13,74 +13,111 @@ concurrency:
 jobs:
   build-test:
     runs-on: ubuntu-latest
+    env:
+      DEMO_OUTDIR: demo_artifacts
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
       - name: Set up Python
+        id: setup-python
         uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+          cache: 'poetry'
+
+      - name: Install Poetry
+        uses: snok/install-poetry@v1
+        with:
+          version: 1.8.4
+          virtualenvs-create: true
+          virtualenvs-in-project: true
+          installer-parallel: true
 
       - name: Install dependencies
         run: |
-          python -m pip install --upgrade pip wheel setuptools
-          # Install runtime deps from pyproject
-          pip install .
-          # Install dev tools
-          pip install pre-commit black flake8 mypy pytest pytest-cov autoflake
+          poetry env use "${{ steps.setup-python.outputs.python-path }}"
+          poetry install --with dev --no-interaction
 
       - name: Run pre-commit
-        run: pre-commit run --color=always --show-diff-on-failure --all-files
+        run: poetry run pre-commit run --color=always --show-diff-on-failure --all-files
 
       - name: Run headless demo (config-driven)
         env:
           MPLBACKEND: Agg
+          STABLE_YIELD_OUTDIR: ${{ env.DEMO_OUTDIR }}
         run: |
-          python src/stable_yield_demo.py configs/demo.toml
-          test -f outputs/pools.csv
-          test -f outputs/by_chain.csv
+          rm -rf "${STABLE_YIELD_OUTDIR}"
+          poetry run python src/stable_yield_demo.py configs/demo.toml
+          for csv_file in \
+            pools.csv \
+            by_chain.csv \
+            by_source.csv \
+            by_stablecoin.csv \
+            topN.csv \
+            concentration.csv \
+            warnings.csv \
+            portfolio_performance.csv \
+            portfolio_nav.csv
+          do
+            test -s "${STABLE_YIELD_OUTDIR}/${csv_file}"
+          done
+          test -s "${STABLE_YIELD_OUTDIR}/bar_group_chain.png"
+          if test -f "${STABLE_YIELD_OUTDIR}/scatter_risk_return.png"; then
+            test -s "${STABLE_YIELD_OUTDIR}/scatter_risk_return.png"
+          else
+            test -s "${STABLE_YIELD_OUTDIR}/scatter_tvl_apy.png"
+          fi
+          test -s "${STABLE_YIELD_OUTDIR}/yield_vs_time.png"
+          test -s "${STABLE_YIELD_OUTDIR}/nav_vs_time.png"
+
+      - name: Upload demo artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: demo-artifacts
+          path: ${{ env.DEMO_OUTDIR }}
+          if-no-files-found: error
 
       - name: Run tests with coverage
         run: |
-          pytest --cov=stable_yield_lab --cov-report=xml --cov-report=html --cov-report=term-missing
+          poetry run pytest --cov=stable_yield_lab --cov-report=xml --cov-report=html --cov-report=term-missing
 
       - name: Prepare coverage site artifact
         run: |
-          python - <<'PY'
-import json
-import pathlib
-import xml.etree.ElementTree as ET
+          poetry run python - <<'PY'
+            import json
+            import pathlib
+            import xml.etree.ElementTree as ET
 
-coverage_xml = pathlib.Path("coverage.xml")
-root = ET.fromstring(coverage_xml.read_text())
-line_rate = float(root.get("line-rate", 0.0))
-percentage = round(line_rate * 100, 2)
+            coverage_xml = pathlib.Path("coverage.xml")
+            root = ET.fromstring(coverage_xml.read_text())
+            line_rate = float(root.get("line-rate", 0.0))
+            percentage = round(line_rate * 100, 2)
 
-def pick_color(pct: float) -> str:
-    if pct >= 90:
-        return "brightgreen"
-    if pct >= 75:
-        return "green"
-    if pct >= 60:
-        return "yellowgreen"
-    if pct >= 45:
-        return "yellow"
-    if pct >= 30:
-        return "orange"
-    return "red"
+            def pick_color(pct: float) -> str:
+                if pct >= 90:
+                    return "brightgreen"
+                if pct >= 75:
+                    return "green"
+                if pct >= 60:
+                    return "yellowgreen"
+                if pct >= 45:
+                    return "yellow"
+                if pct >= 30:
+                    return "orange"
+                return "red"
 
-badge = {
-    "schemaVersion": 1,
-    "label": "coverage",
-    "message": f"{percentage:.1f}%",
-    "color": pick_color(percentage),
-}
+            badge = {
+                "schemaVersion": 1,
+                "label": "coverage",
+                "message": f"{percentage:.1f}%",
+                "color": pick_color(percentage),
+            }
 
-site_dir = pathlib.Path("coverage-site")
-site_dir.mkdir(parents=True, exist_ok=True)
-(site_dir / "badge.json").write_text(json.dumps(badge))
-PY
+            site_dir = pathlib.Path("coverage-site")
+            site_dir.mkdir(parents=True, exist_ok=True)
+            (site_dir / "badge.json").write_text(json.dumps(badge))
+          PY
           rm -rf coverage-site/report
           mkdir -p coverage-site
           cp -r htmlcov coverage-site/report

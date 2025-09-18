@@ -12,6 +12,9 @@ jobs:
   analyze-issue:
     runs-on: ubuntu-latest
     steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
       - name: Request Codex triage
         uses: ./.github/actions/codex-request
         with:
