@@ -11,16 +11,12 @@ Design goals:
 
 from __future__ import annotations
 
-from typing import Any
-
-import logging
-import pandas as pd
-
 from . import analytics, risk_scoring, visualization
 from . import reporting as reporting_module
 from .analytics.metrics import Metrics
 from .analytics.performance import cumulative_return, nav_series, nav_trajectories
 from .core import Pool, PoolRepository, PoolReturn, ReturnRepository
+from .pipeline import Pipeline
 from .sources import (
     BeefySource,
     CSVSource,
@@ -40,7 +36,6 @@ from .sources import (
 # -----------------
 
 # Concrete adapters live in :mod:`stable_yield_lab.sources`.
-logger = logging.getLogger(__name__)
 
 # -----------------
 # Metrics & Analytics
@@ -61,39 +56,6 @@ attribution = analytics.attribution
 # Backwards-compatible re-exports for the public package namespace.
 Visualizer = visualization.Visualizer
 reporting = reporting_module
-
-
-# -----------------
-# Pipeline
-# -----------------
-
-
-class Pipeline:
-    """Composable pipeline: fetch -> repository -> filter -> metrics -> visuals"""
-
-    def __init__(self, sources: list[Any]) -> None:
-        self.sources = sources
-
-    def run(self) -> PoolRepository:
-        repo = PoolRepository()
-        for s in self.sources:
-            try:
-                fetched = s.fetch()
-                scored = [risk_scoring.score_pool(p) for p in fetched]
-                repo.extend(scored)
-            except Exception as e:
-                # Log and continue
-                logger.warning("Source %s failed: %s", s.__class__.__name__, e)
-        return repo
-
-    def run_history(self) -> pd.DataFrame:
-        repo = ReturnRepository()
-        for s in self.sources:
-            try:
-                repo.extend(s.fetch())
-            except Exception as e:
-                logger.warning("Source %s failed: %s", s.__class__.__name__, e)
-        return repo.to_timeseries()
 
 
 __all__ = [

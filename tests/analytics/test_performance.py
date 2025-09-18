@@ -5,7 +5,7 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
-from stable_yield_lab import Pipeline
+from stable_yield_lab.pipeline import Pipeline
 from stable_yield_lab.analytics import performance
 from stable_yield_lab.analytics.performance import (
     RebalanceScenario,
