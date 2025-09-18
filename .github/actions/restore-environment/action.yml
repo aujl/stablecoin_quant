@@ -1,0 +1,87 @@
+name: Restore Poetry Environment
+description: Restore cached Poetry environment artifacts and configure Poetry for the current job.
+
+inputs:
+  python-version:
+    description: "Python version to use when restoring the environment"
+    required: false
+    default: "3.12"
+  poetry-version:
+    description: "Poetry version to install when the CLI is unavailable"
+    required: false
+    default: "1.8.4"
+  artifacts-dir:
+    description: "Directory containing the downloaded environment artifact"
+    required: false
+    default: "artifacts"
+
+runs:
+  using: "composite"
+  steps:
+    - name: Set up Python
+      id: python
+      uses: actions/setup-python@v5
+      with:
+        python-version: ${{ inputs.python-version }}
+
+    - name: Restore cached environment
+      shell: bash
+      env:
+        ARTIFACTS_DIR: ${{ inputs.artifacts-dir }}
+        POETRY_VERSION: ${{ inputs.poetry-version }}
+      run: |
+        set -euo pipefail
+
+        artifacts_path="${GITHUB_WORKSPACE}/${ARTIFACTS_DIR}"
+        target_venv="${GITHUB_WORKSPACE}/.venv"
+
+        if [ ! -d "${artifacts_path}" ]; then
+          echo "::error::Cached environment directory not found at ${artifacts_path}" >&2
+          exit 1
+        fi
+        if [ ! -d "${artifacts_path}/venv" ]; then
+          echo "::error::Cached virtual environment missing at ${artifacts_path}/venv" >&2
+          ls -la "${artifacts_path}" >&2 || true
+          exit 1
+        fi
+
+        echo "Restoring virtual environment to ${target_venv}" \
+          && rm -rf "${target_venv}" \
+          && mkdir -p "${target_venv}" \
+          && rsync -a "${artifacts_path}/venv/" "${target_venv}/"
+
+        find "${target_venv}" -type f -name "python*" -exec chmod +x {} \; 2>/dev/null || true
+        find "${target_venv}" -path "*/bin/*" -type f -exec chmod +x {} \; 2>/dev/null || true
+
+        echo "${target_venv}/bin" >>"${GITHUB_PATH}"
+
+        export POETRY_CACHE_DIR="${artifacts_path}/poetry-cache"
+        export POETRY_DATA_DIR="${artifacts_path}/poetry-data"
+
+        if ! command -v poetry >/dev/null 2>&1; then
+          python -m pip install --upgrade pip
+          python -m pip install "poetry==${POETRY_VERSION}"
+        fi
+
+        echo "${HOME}/.local/bin" >>"${GITHUB_PATH}"
+
+        {
+          echo "ARTIFACTS_DIR=${artifacts_path}"
+          echo "POETRY_CACHE_DIR=${POETRY_CACHE_DIR}"
+          echo "POETRY_DATA_DIR=${POETRY_DATA_DIR}"
+          echo "VIRTUAL_ENV=${target_venv}"
+          echo "PROJECT_DIR=${GITHUB_WORKSPACE}"
+          echo "PYTHON_VERSION=${{ inputs.python-version }}"
+        } >>"${GITHUB_ENV}"
+
+        cd "${GITHUB_WORKSPACE}"
+        poetry config virtualenvs.create true
+        poetry config virtualenvs.in-project true
+        poetry config installer.parallel true
+        poetry config cache-dir "${POETRY_CACHE_DIR}"
+
+        poetry env use "${target_venv}/bin/python"
+        poetry run python - <<'PY'
+        import sys
+        print(f"Using cached Poetry environment: {sys.executable}")
+        PY

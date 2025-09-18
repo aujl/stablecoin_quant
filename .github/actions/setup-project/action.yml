@@ -28,52 +28,27 @@ runs:
       uses: actions/setup-python@v5
       with:
         python-version: ${{ inputs.python-version }}
-        cache: poetry
-        cache-dependency-path: ${{ inputs.cache-dependency-path }}
-    - name: "Restore cached Poetry environment"
-      id: poetry-cache
-      uses: actions/cache@v4
-      with:
-        path: |
-          ~/.local/bin
-          ~/.local/share/pypoetry
-          ~/.config/pypoetry
-        key: poetry-${{ runner.os }}-${{ steps.setup-python.outputs.python-version }}-1.8.4
 
     - name: "Install Poetry"
-      if: steps.poetry-cache.outputs.cache-hit != 'true'
-      shell: bash
-      env:
-        POETRY_VERSION: "1.8.4"
-      run: |
-        set -euo pipefail
-        curl -sSL https://install.python-poetry.org | python - --version "${POETRY_VERSION}"
-
-    - name: "Ensure Poetry on PATH"
       shell: bash
       run: |
         set -euo pipefail
+        python -m pip install --upgrade pip
+        python -m pip install "poetry==1.8.4"
         echo "${HOME}/.local/bin" >>"${GITHUB_PATH}"
-        if [ -d "${HOME}/.poetry/bin" ]; then
-          echo "${HOME}/.poetry/bin" >>"${GITHUB_PATH}"
-        fi
 
     - name: "Configure Poetry"
       shell: bash
       run: |
         set -euo pipefail
+        poetry --version
         poetry config virtualenvs.create true
         poetry config virtualenvs.in-project true
         poetry config installer.parallel true
+
     - name: "Install dependencies"
       working-directory: ${{ inputs.working-directory }}
       shell: bash
       run: |
         set -euo pipefail
-        if ! command -v poetry >/dev/null 2>&1; then
-          echo '::error::Poetry is not available on PATH after installation.'
-          exit 1
-        fi
-        poetry --version
-
         poetry install ${{ inputs.install-args }}
