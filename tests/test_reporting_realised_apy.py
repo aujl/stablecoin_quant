@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from stable_yield_lab import Pipeline
+from stable_yield_lab.pipeline import Pipeline
 from stable_yield_lab.core import Pool, PoolRepository
 from stable_yield_lab.reporting import cross_section_report
 from stable_yield_lab.sources import HistoricalCSVSource

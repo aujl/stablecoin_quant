@@ -8,7 +8,7 @@ from typing import Any, cast
 
 import pandas as pd
 
-from stable_yield_lab import Pipeline
+from stable_yield_lab.pipeline import Pipeline
 from stable_yield_lab.analytics import performance, portfolio, risk as risk_metrics
 from stable_yield_lab.analytics.metrics import Metrics
 from stable_yield_lab.core import PoolRepository

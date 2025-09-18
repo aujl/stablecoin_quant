@@ -3,7 +3,7 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
-from stable_yield_lab import Pipeline
+from stable_yield_lab.pipeline import Pipeline
 from stable_yield_lab.sources import HistoricalCSVSource
 
 
