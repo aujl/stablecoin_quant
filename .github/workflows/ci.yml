@@ -122,18 +122,18 @@ jobs:
           mkdir -p coverage-site
           cp -r htmlcov coverage-site/report
           cat <<'HTML' > coverage-site/index.html
-<!doctype html>
-<html lang="en">
-  <head>
-    <meta charset="utf-8" />
-    <meta http-equiv="refresh" content="0; url=report/index.html" />
-    <title>Coverage report</title>
-  </head>
-  <body>
-    <p><a href="report/index.html">View the coverage report.</a></p>
-  </body>
-</html>
-HTML
+          <!doctype html>
+          <html lang="en">
+            <head>
+              <meta charset="utf-8" />
+              <meta http-equiv="refresh" content="0; url=report/index.html" />
+              <title>Coverage report</title>
+            </head>
+            <body>
+              <p><a href="report/index.html">View the coverage report.</a></p>
+            </body>
+          </html>
+          HTML
 
       - name: Upload coverage artifact
         uses: actions/upload-artifact@v4
