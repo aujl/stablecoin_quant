@@ -1,0 +1,108 @@
+name: Test Suite
+
+on:
+  workflow_call:
+    inputs:
+      python-version:
+        description: "Python version to use"
+        required: false
+        type: string
+        default: "3.12"
+      coverage-xml-artifact:
+        description: "Name of the uploaded coverage.xml artifact"
+        required: false
+        type: string
+        default: "coverage-xml"
+      coverage-html-artifact:
+        description: "Name of the uploaded HTML coverage artifact"
+        required: false
+        type: string
+        default: "coverage-html"
+
+jobs:
+  tests:
+    name: Run pytest with coverage
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up project environment
+        uses: ./.github/actions/setup-project
+        with:
+          python-version: ${{ inputs.python-version }}
+
+      - name: Run tests with coverage
+        run: |
+          poetry run pytest --cov=stable_yield_lab --cov-report=xml --cov-report=html --cov-report=term-missing
+
+      - name: Prepare coverage site artifact
+        run: |
+          poetry run python - <<'PY'
+          import json
+          import pathlib
+          import xml.etree.ElementTree as ET
+
+          coverage_xml = pathlib.Path("coverage.xml")
+          root = ET.fromstring(coverage_xml.read_text())
+          line_rate = float(root.get("line-rate", 0.0))
+          percentage = round(line_rate * 100, 2)
+
+          def pick_color(pct: float) -> str:
+              if pct >= 90:
+                  return "brightgreen"
+              if pct >= 75:
+                  return "green"
+              if pct >= 60:
+                  return "yellowgreen"
+              if pct >= 45:
+                  return "yellow"
+              if pct >= 30:
+                  return "orange"
+              return "red"
+
+          badge = {
+              "schemaVersion": 1,
+              "label": "coverage",
+              "message": f"{percentage:.1f}%",
+              "color": pick_color(percentage),
+          }
+
+          site_dir = pathlib.Path("coverage-site")
+          site_dir.mkdir(parents=True, exist_ok=True)
+          (site_dir / "badge.json").write_text(json.dumps(badge))
+          PY
+          rm -rf coverage-site/report
+          mkdir -p coverage-site
+          cp -r htmlcov coverage-site/report
+          cat <<'HTML' > coverage-site/index.html
+          <!doctype html>
+          <html lang="en">
+            <head>
+              <meta charset="utf-8" />
+              <meta http-equiv="refresh" content="0; url=report/index.html" />
+              <title>Coverage report</title>
+            </head>
+            <body>
+              <p><a href="report/index.html">View the coverage report.</a></p>
+            </body>
+          </html>
+          HTML
+
+      - name: Upload coverage XML
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ inputs.coverage-xml-artifact }}
+          path: coverage.xml
+
+      - name: Upload HTML coverage report
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ inputs.coverage-html-artifact }}
+          path: coverage-site/report
+
+      - name: Upload coverage site for Pages
+        if: github.event_name == 'push'
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: coverage-site

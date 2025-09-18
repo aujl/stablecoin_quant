@@ -1,0 +1,70 @@
+name: Pre-commit Checks
+
+on:
+  workflow_call:
+    inputs:
+      python-version:
+        description: "Python version to use"
+        required: false
+        type: string
+        default: "3.12"
+    outputs:
+      needs-autofix:
+        description: "Whether pre-commit applied fixes"
+        value: ${{ jobs.pre_commit.outputs.needs-autofix }}
+
+jobs:
+  pre_commit:
+    name: Run pre-commit
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    outputs:
+      needs-autofix: ${{ steps.precommit.outputs.needs_autofix }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up project environment
+        uses: ./.github/actions/setup-project
+        with:
+          python-version: ${{ inputs.python-version }}
+
+      - name: Run pre-commit hooks
+        id: precommit
+        shell: bash
+        run: |
+          set -eo pipefail
+          set +e
+          poetry run pre-commit run --color=always --show-diff-on-failure --all-files
+          exit_code=$?
+          set -e
+
+          if [ "$exit_code" -eq 0 ]; then
+            echo "needs_autofix=false" >>"${GITHUB_OUTPUT}"
+            exit 0
+          fi
+
+          if git diff --quiet; then
+            echo "needs_autofix=false" >>"${GITHUB_OUTPUT}"
+            exit "$exit_code"
+          fi
+
+          echo "needs_autofix=true" >>"${GITHUB_OUTPUT}"
+
+      - name: Auto-commit pre-commit fixes
+        if: steps.precommit.outputs.needs_autofix == 'true' && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+        uses: stefanzweifel/git-auto-commit-action@v5
+        with:
+          commit_message: "style: apply pre-commit auto-fixes"
+          branch: ${{ github.head_ref }}
+          skip_checkout: true
+
+      - name: Fail if pre-commit fixes cannot be applied automatically
+        if: steps.precommit.outputs.needs_autofix == 'true' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository)
+        run: |
+          echo '::error::pre-commit hooks modified files but CI could not push the fixes automatically.'
+          echo '::error::Please run "poetry run pre-commit run --all-files" locally and push the resulting changes.'
+          exit 1
