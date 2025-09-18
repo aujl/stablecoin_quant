@@ -43,6 +43,7 @@ jobs:
         run: |
           rm -rf "${STABLE_YIELD_OUTDIR}"
           poetry run python src/stable_yield_demo.py configs/demo.toml
+
           test -s "${STABLE_YIELD_OUTDIR}/bar_group_chain.png"
           if test -f "${STABLE_YIELD_OUTDIR}/scatter_risk_return.png"; then
             test -s "${STABLE_YIELD_OUTDIR}/scatter_risk_return.png"
