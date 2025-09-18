@@ -13,6 +13,8 @@ concurrency:
 jobs:
   build-test:
     runs-on: ubuntu-latest
+    env:
+      DEMO_OUTDIR: demo_artifacts
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -36,10 +38,38 @@ jobs:
       - name: Run headless demo (config-driven)
         env:
           MPLBACKEND: Agg
+          STABLE_YIELD_OUTDIR: ${{ env.DEMO_OUTDIR }}
         run: |
+          rm -rf "${STABLE_YIELD_OUTDIR}"
           python src/stable_yield_demo.py configs/demo.toml
-          test -f outputs/pools.csv
-          test -f outputs/by_chain.csv
+          for csv_file in \
+            pools.csv \
+            by_chain.csv \
+            by_source.csv \
+            by_stablecoin.csv \
+            topN.csv \
+            concentration.csv \
+            warnings.csv \
+            portfolio_performance.csv \
+            portfolio_nav.csv
+          do
+            test -s "${STABLE_YIELD_OUTDIR}/${csv_file}"
+          done
+          test -s "${STABLE_YIELD_OUTDIR}/bar_group_chain.png"
+          if test -f "${STABLE_YIELD_OUTDIR}/scatter_risk_return.png"; then
+            test -s "${STABLE_YIELD_OUTDIR}/scatter_risk_return.png"
+          else
+            test -s "${STABLE_YIELD_OUTDIR}/scatter_tvl_apy.png"
+          fi
+          test -s "${STABLE_YIELD_OUTDIR}/yield_vs_time.png"
+          test -s "${STABLE_YIELD_OUTDIR}/nav_vs_time.png"
+
+      - name: Upload demo artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: demo-artifacts
+          path: ${{ env.DEMO_OUTDIR }}
+          if-no-files-found: error
 
       - name: Run tests with coverage
         run: |
