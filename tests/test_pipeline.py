@@ -1,6 +1,7 @@
 from pathlib import Path
 
-from stable_yield_lab import CSVSource, Pipeline
+from stable_yield_lab import Pipeline
+from stable_yield_lab.sources import CSVSource
 from stable_yield_lab.core import Pool
 from stable_yield_lab.risk_scoring import calculate_risk_score
 

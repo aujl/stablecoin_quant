@@ -8,17 +8,9 @@ from typing import Any, cast
 
 import pandas as pd
 
-from stable_yield_lab import (
-    CSVSource,
-    HistoricalCSVSource,
-    Metrics,
-    Pipeline,
-    Visualizer,
-    performance,
-    portfolio,
-    risk_metrics,
-)
+from stable_yield_lab import Metrics, Pipeline, Visualizer, performance, portfolio, risk_metrics
 from stable_yield_lab.core import PoolRepository
+from stable_yield_lab.sources import CSVSource, HistoricalCSVSource
 from stable_yield_lab.reporting import cross_section_report
 
 
