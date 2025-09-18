@@ -12,6 +12,11 @@ This guide demonstrates how to evaluate a small set of stablecoin pools using th
    ```bash
    poetry run python src/stable_yield_demo.py configs/demo.toml
    ```
+3. Import immutable pool models from the ``stable_yield_lab.core`` namespace when
+   scripting your own analytics:
+   ```python
+   from stable_yield_lab.core import Pool, PoolRepository
+   ```
 
 ## 2. Load sample performance data
 
@@ -20,6 +25,7 @@ This guide demonstrates how to evaluate a small set of stablecoin pools using th
 >>> from tempfile import TemporaryDirectory
 >>> import pandas as pd
 >>> from stable_yield_lab import Visualizer, performance
+>>> from stable_yield_lab.core import PoolRepository
 >>>
 >>> yields_df = pd.read_csv("src/sample_yields.csv", parse_dates=["timestamp"])
 >>> returns = yields_df.pivot(index="timestamp", columns="name", values="period_return")

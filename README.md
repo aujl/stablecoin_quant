@@ -41,6 +41,12 @@ Run the demo with sample historical returns to generate Net Asset Value (NAV) an
 poetry run python src/stable_yield_demo.py configs/demo.toml
 ```
 
+Core data models now live under ``stable_yield_lab.core``:
+
+```python
+from stable_yield_lab.core import Pool, PoolRepository, ReturnRepository
+```
+
 The script applies `stable_yield_lab.performance.nav_curve` and `performance.yield_curve` to compute time-series performance.
 `Visualizer.plot_nav` and `Visualizer.plot_yield` render the NAV trajectory and annualized yields.
 A steadily rising NAV indicates compounding growth; falling or flat lines flag underperformance.
@@ -51,7 +57,7 @@ For a step-by-step example, see [docs/investor_walkthrough.md](docs/investor_wal
 `stable_yield_lab.reporting.cross_section_report` now enriches the `concentration.csv`
 output with realised risk statistics whenever you supply historical returns. Pass a
 wide DataFrame of periodic returns (columns correspond to pool names) via the
-`returns` argument—`HistoricalCSVSource` and `ReturnRepository` make it easy to load
+`returns` argument—`HistoricalCSVSource` and `stable_yield_lab.core.ReturnRepository` make it easy to load
 bundled fixtures. The resulting CSV includes:
 
 - `scope`: `total`, `chain:<name>`, `stablecoin:<symbol>`, and `pool:<name>` rows.

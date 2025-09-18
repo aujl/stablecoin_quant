@@ -1,4 +1,4 @@
-from stable_yield_lab.core.models import Pool
+from stable_yield_lab.core import Pool
 from stable_yield_lab.risk_scoring import calculate_risk_score, score_pool
 
 
