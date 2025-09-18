@@ -10,199 +10,39 @@ concurrency:
   group: pages
   cancel-in-progress: false
 
+permissions:
+  contents: read
+
 jobs:
-  build-test:
-    runs-on: ubuntu-latest
+  lint:
+    # Grant write access so the reusable pre-commit workflow can push auto-fixes on internal branches.
     permissions:
       contents: write
-    outputs:
-      precommit_autofix: ${{ steps.precommit.outputs.needs_autofix }}
-    env:
-      DEMO_OUTDIR: demo_artifacts
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event_name == 'pull_request' && github.head_ref || github.ref }}
+    uses: ./.github/workflows/pre-commit.yml
+    with:
+      python-version: '3.12'
 
-      - name: Install Poetry
-        uses: snok/install-poetry@v1
-        with:
-          version: 1.8.4
-          virtualenvs-create: true
-          virtualenvs-in-project: true
-          installer-parallel: true
+  demo:
+    needs: lint
+    if: needs.lint.outputs.needs-autofix != 'true'
+    uses: ./.github/workflows/demo.yml
+    with:
+      python-version: '3.12'
+      artifact-name: demo-artifacts
+      demo-outdir: demo_artifacts
 
-      - name: Set up Python
-        id: setup-python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-          cache: 'poetry'
-          # poetry.lock is intentionally ignored; fall back to pyproject for cache key.
-          cache-dependency-path: pyproject.toml
-
-      - name: Install dependencies
-        run: |
-          poetry env use "${{ steps.setup-python.outputs.python-path }}"
-          poetry install --with dev --no-interaction
-
-      - name: Run pre-commit
-        id: precommit
-        run: |
-          set -eo pipefail
-          set +e
-          poetry run pre-commit run --color=always --show-diff-on-failure --all-files
-          exit_code=$?
-          set -e
-          echo "exit_code=${exit_code}" >>"${GITHUB_OUTPUT}"
-          if [ "${exit_code}" -eq 0 ]; then
-            echo "needs_autofix=false" >>"${GITHUB_OUTPUT}"
-            exit 0
-          fi
-
-          if git diff --quiet; then
-            echo "needs_autofix=false" >>"${GITHUB_OUTPUT}"
-            exit "${exit_code}"
-          fi
-
-          echo "needs_autofix=true" >>"${GITHUB_OUTPUT}"
-
-      - name: Auto-commit pre-commit fixes
-        if: steps.precommit.outputs.needs_autofix == 'true' && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
-        uses: stefanzweifel/git-auto-commit-action@v5
-        with:
-          commit_message: "style: apply pre-commit auto-fixes"
-          branch: ${{ github.head_ref }}
-          skip_checkout: true
-
-      - name: Fail if pre-commit fixes cannot be applied automatically
-        if: steps.precommit.outputs.needs_autofix == 'true' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository)
-        run: |
-          echo '::error::pre-commit hooks modified files but CI could not push the fixes automatically.'
-          echo '::error::Please run "poetry run pre-commit run --all-files" locally and push the resulting changes.'
-          exit 1
-
-      - name: Run headless demo (config-driven)
-        if: steps.precommit.outputs.needs_autofix != 'true'
-        env:
-          MPLBACKEND: Agg
-          STABLE_YIELD_OUTDIR: ${{ env.DEMO_OUTDIR }}
-        run: |
-          rm -rf "${STABLE_YIELD_OUTDIR}"
-          poetry run python src/stable_yield_demo.py configs/demo.toml
-          for csv_file in \
-            pools.csv \
-            by_chain.csv \
-            by_source.csv \
-            by_stablecoin.csv \
-            topN.csv \
-            concentration.csv \
-            warnings.csv \
-            portfolio_performance.csv \
-            portfolio_nav.csv
-          do
-            test -s "${STABLE_YIELD_OUTDIR}/${csv_file}"
-          done
-          test -s "${STABLE_YIELD_OUTDIR}/bar_group_chain.png"
-          if test -f "${STABLE_YIELD_OUTDIR}/scatter_risk_return.png"; then
-            test -s "${STABLE_YIELD_OUTDIR}/scatter_risk_return.png"
-          else
-            test -s "${STABLE_YIELD_OUTDIR}/scatter_tvl_apy.png"
-          fi
-          test -s "${STABLE_YIELD_OUTDIR}/yield_vs_time.png"
-          test -s "${STABLE_YIELD_OUTDIR}/nav_vs_time.png"
-
-      - name: Upload demo artifacts
-        if: steps.precommit.outputs.needs_autofix != 'true'
-        uses: actions/upload-artifact@v4
-        with:
-          name: demo-artifacts
-          path: ${{ env.DEMO_OUTDIR }}
-          if-no-files-found: error
-
-      - name: Run tests with coverage
-        if: steps.precommit.outputs.needs_autofix != 'true'
-        run: |
-          poetry run pytest --cov=stable_yield_lab --cov-report=xml --cov-report=html --cov-report=term-missing
-
-      - name: Prepare coverage site artifact
-        if: steps.precommit.outputs.needs_autofix != 'true'
-        run: |
-          poetry run python - <<'PY'
-            import json
-            import pathlib
-            import xml.etree.ElementTree as ET
-
-            coverage_xml = pathlib.Path("coverage.xml")
-            root = ET.fromstring(coverage_xml.read_text())
-            line_rate = float(root.get("line-rate", 0.0))
-            percentage = round(line_rate * 100, 2)
-
-            def pick_color(pct: float) -> str:
-                if pct >= 90:
-                    return "brightgreen"
-                if pct >= 75:
-                    return "green"
-                if pct >= 60:
-                    return "yellowgreen"
-                if pct >= 45:
-                    return "yellow"
-                if pct >= 30:
-                    return "orange"
-                return "red"
-
-            badge = {
-                "schemaVersion": 1,
-                "label": "coverage",
-                "message": f"{percentage:.1f}%",
-                "color": pick_color(percentage),
-            }
-
-            site_dir = pathlib.Path("coverage-site")
-            site_dir.mkdir(parents=True, exist_ok=True)
-            (site_dir / "badge.json").write_text(json.dumps(badge))
-          PY
-          rm -rf coverage-site/report
-          mkdir -p coverage-site
-          cp -r htmlcov coverage-site/report
-          cat <<'HTML' > coverage-site/index.html
-          <!doctype html>
-          <html lang="en">
-            <head>
-              <meta charset="utf-8" />
-              <meta http-equiv="refresh" content="0; url=report/index.html" />
-              <title>Coverage report</title>
-            </head>
-            <body>
-              <p><a href="report/index.html">View the coverage report.</a></p>
-            </body>
-          </html>
-          HTML
-
-      - name: Upload coverage artifact
-        if: steps.precommit.outputs.needs_autofix != 'true'
-        uses: actions/upload-artifact@v4
-        with:
-          name: coverage-xml
-          path: coverage.xml
-
-      - name: Upload HTML coverage artifact
-        if: steps.precommit.outputs.needs_autofix != 'true'
-        uses: actions/upload-artifact@v4
-        with:
-          name: coverage-html
-          path: coverage-site/report
-
-      - name: Upload coverage site for Pages
-        if: steps.precommit.outputs.needs_autofix != 'true' && github.event_name == 'push'
-        uses: actions/upload-pages-artifact@v3
-        with:
-          path: coverage-site
+  tests:
+    needs: lint
+    if: needs.lint.outputs.needs-autofix != 'true'
+    uses: ./.github/workflows/tests.yml
+    with:
+      python-version: '3.12'
+      coverage-xml-artifact: coverage-xml
+      coverage-html-artifact: coverage-html
 
   deploy-coverage:
-    needs: build-test
-    if: github.event_name == 'push' && startsWith(github.ref, 'refs/heads/') && github.ref != 'refs/heads/gh-pages' && needs.build-test.outputs.precommit_autofix != 'true'
+    needs: tests
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/heads/') && github.ref != 'refs/heads/gh-pages'
     runs-on: ubuntu-latest
     permissions:
       pages: write

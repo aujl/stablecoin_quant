@@ -1,0 +1,74 @@
+name: Generate Demo Artifacts
+
+on:
+  workflow_call:
+    inputs:
+      python-version:
+        description: "Python version to use"
+        required: false
+        type: string
+        default: "3.12"
+      artifact-name:
+        description: "Name of the uploaded demo artifact"
+        required: false
+        type: string
+        default: "demo-artifacts"
+      demo-outdir:
+        description: "Directory used for generated demo files"
+        required: false
+        type: string
+        default: "demo_artifacts"
+
+jobs:
+  demo:
+    name: Run sample demo
+    runs-on: ubuntu-latest
+    env:
+      DEMO_OUTDIR: ${{ inputs.demo-outdir }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up project environment
+        uses: ./.github/actions/setup-project
+        with:
+          python-version: ${{ inputs.python-version }}
+          install-args: "--no-interaction"
+
+      - name: Generate demo artifacts
+        env:
+          MPLBACKEND: Agg
+          STABLE_YIELD_OUTDIR: ${{ env.DEMO_OUTDIR }}
+        run: |
+          rm -rf "${STABLE_YIELD_OUTDIR}"
+          poetry run python src/stable_yield_demo.py configs/demo.toml
+
+          for csv_file in \
+            pools.csv \
+            by_chain.csv \
+            by_source.csv \
+            by_stablecoin.csv \
+            topN.csv \
+            concentration.csv \
+            warnings.csv \
+            portfolio_performance.csv \
+            portfolio_nav.csv
+          do
+            test -s "${STABLE_YIELD_OUTDIR}/${csv_file}"
+          done
+
+          test -s "${STABLE_YIELD_OUTDIR}/bar_group_chain.png"
+          if test -f "${STABLE_YIELD_OUTDIR}/scatter_risk_return.png"; then
+            test -s "${STABLE_YIELD_OUTDIR}/scatter_risk_return.png"
+          else
+            test -s "${STABLE_YIELD_OUTDIR}/scatter_tvl_apy.png"
+          fi
+          test -s "${STABLE_YIELD_OUTDIR}/yield_vs_time.png"
+          test -s "${STABLE_YIELD_OUTDIR}/nav_vs_time.png"
+
+      - name: Upload demo artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ inputs.artifact-name }}
+          path: ${{ env.DEMO_OUTDIR }}
+          if-no-files-found: error
