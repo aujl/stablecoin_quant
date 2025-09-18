@@ -26,7 +26,7 @@ def _ensure_datetime_index(index: pd.Index, *, label: str) -> pd.DatetimeIndex:
         dt_index = index
     else:
         dt_index = pd.to_datetime(index, utc=True, errors="coerce")
-    if dt_index.isna().any():  # type: ignore[truthy-function]
+    if dt_index.isna().any():
         raise TypeError(f"{label} index must be datetime-like")
     return pd.DatetimeIndex(dt_index).sort_values()
 

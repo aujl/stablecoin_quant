@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import cast
 
 import pandas as pd
 
@@ -345,24 +346,24 @@ def cross_section_report(
             return {col: float("nan") for col in _RISK_COLUMNS}
         return {col: values.get(col, float("nan")) for col in _RISK_COLUMNS}
 
-    conc_records: list[dict[str, float]] = []
+    conc_records: list[dict[str, float | str]] = []
 
     total_hhi = float(hhi_total["hhi"].iloc[0]) if not hhi_total.empty else float("nan")
-    record = {"scope": "total", "hhi": total_hhi}
+    record = cast(dict[str, float | str], {"scope": "total", "hhi": total_hhi})
     record.update(_metrics_for("total"))
     conc_records.append(record)
 
     if not hhi_chain.empty:
         for _, row in hhi_chain.iterrows():
             scope = f"chain:{row['chain']}"
-            record = {"scope": scope, "hhi": float(row["hhi"])}
+            record = cast(dict[str, float | str], {"scope": scope, "hhi": float(row["hhi"])})
             record.update(_metrics_for(scope))
             conc_records.append(record)
 
     if not hhi_stable.empty:
         for _, row in hhi_stable.iterrows():
             scope = f"stablecoin:{row['stablecoin']}"
-            record = {"scope": scope, "hhi": float(row["hhi"])}
+            record = cast(dict[str, float | str], {"scope": scope, "hhi": float(row["hhi"])})
             record.update(_metrics_for(scope))
             conc_records.append(record)
 
@@ -370,7 +371,7 @@ def cross_section_report(
     for scope, values in metrics_map.items():
         if scope in existing_scopes:
             continue
-        record = {"scope": scope, "hhi": float("nan")}
+        record = cast(dict[str, float | str], {"scope": scope, "hhi": float("nan")})
         record.update({col: values.get(col, float("nan")) for col in _RISK_COLUMNS})
         conc_records.append(record)
 
