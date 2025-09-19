@@ -4,7 +4,7 @@
 
 Experimental toolkit for analyzing and visualizing yields on stablecoin pools.
 
-Latest test coverage is published automatically from CI to [GitHub Pages](https://aujl.github.io/stablecoin_quant/coverage/), which hosts the HTML report alongside the badge metadata for the shield above.
+Latest test coverage is published automatically from CI to [GitHub Pages](https://aujl.github.io/stablecoin_quant/coverage/), which redirects to the full [HTML report](https://aujl.github.io/stablecoin_quant/report/index.html) and hosts the badge metadata for the shield above.
 
 ## Project Layout
 
