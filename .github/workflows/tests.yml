@@ -72,7 +72,9 @@ jobs:
           poetry run python - <<'PY'
           import json
           import pathlib
+          import shutil
           import xml.etree.ElementTree as ET
+          from textwrap import dedent
 
           coverage_xml = pathlib.Path("coverage.xml")
           root = ET.fromstring(coverage_xml.read_text())
@@ -100,25 +102,50 @@ jobs:
           }
 
           site_dir = pathlib.Path("coverage-site")
-          site_dir.mkdir(parents=True, exist_ok=True)
-          (site_dir / "badge.json").write_text(json.dumps(badge))
+          htmlcov_dir = pathlib.Path("htmlcov")
+          report_dir = site_dir / "report"
+          coverage_dir = site_dir / "coverage"
+
+          if not htmlcov_dir.exists():
+              raise SystemExit("Expected htmlcov directory to exist")
+
+          if site_dir.exists():
+              shutil.rmtree(site_dir)
+
+          report_dir.mkdir(parents=True, exist_ok=True)
+          coverage_dir.mkdir(parents=True, exist_ok=True)
+
+          shutil.copytree(htmlcov_dir, report_dir, dirs_exist_ok=True)
+
+          for target in (site_dir / "badge.json", coverage_dir / "badge.json"):
+              target.parent.mkdir(parents=True, exist_ok=True)
+              target.write_text(json.dumps(badge))
+
+          (site_dir / ".nojekyll").write_text("")
+
+          redirect_template = dedent(
+              """\
+              <!doctype html>
+              <html lang="en">
+                <head>
+                  <meta charset='utf-8' />
+                  <meta http-equiv='refresh' content='0; url={target}' />
+                  <title>Coverage report</title>
+                </head>
+                <body>
+                  <p><a href='{target}'>View the coverage report.</a></p>
+                </body>
+              </html>
+              """
+          )
+
+          (site_dir / "index.html").write_text(
+              redirect_template.format(target="report/index.html")
+          )
+          (coverage_dir / "index.html").write_text(
+              redirect_template.format(target="../report/index.html")
+          )
           PY
-          rm -rf coverage-site/report
-          mkdir -p coverage-site
-          cp -r htmlcov coverage-site/report
-          cat <<'HTML' > coverage-site/index.html
-          <!doctype html>
-          <html lang="en">
-            <head>
-              <meta charset="utf-8" />
-              <meta http-equiv="refresh" content="0; url=report/index.html" />
-              <title>Coverage report</title>
-            </head>
-            <body>
-              <p><a href="report/index.html">View the coverage report.</a></p>
-            </body>
-          </html>
-          HTML
 
       - name: Upload coverage XML
         uses: actions/upload-artifact@v4
