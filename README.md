@@ -55,6 +55,15 @@ render the NAV trajectory and annualized yields.
 A steadily rising NAV indicates compounding growth; falling or flat lines flag underperformance.
 For a step-by-step example, see [docs/investor_walkthrough.md](docs/investor_walkthrough.md).
 
+### Daily Demo Artifacts
+
+Automated GitHub Actions runs publish the latest demo CSV reports and
+charts as downloadable artifacts without touching the repository
+history. Follow the walkthrough in
+[docs/demo_artifacts.md](docs/demo_artifacts.md) to retrieve the
+`daily-demo-artifacts` bundle from the most recent `generate-demo-images`
+workflow execution.
+
 ### Cross-Section Risk Reporting
 
 `stable_yield_lab.reporting.cross_section_report` now enriches the `concentration.csv`
