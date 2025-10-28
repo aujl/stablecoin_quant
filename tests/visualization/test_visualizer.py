@@ -27,6 +27,9 @@ class MatplotlibSpy:
     def bar(self, x: Iterable[Any], y: Iterable[Any], *args: Any, **kwargs: Any) -> None:
         self._record("bar", (list(x), list(y), *args), **kwargs)
 
+    def barh(self, y: Iterable[Any], width: Iterable[Any], *args: Any, **kwargs: Any) -> None:
+        self._record("barh", (list(y), list(width), *args), **kwargs)
+
     def scatter(
         self,
         x: Iterable[Any],
@@ -96,7 +99,7 @@ def test_bar_apr_uses_named_columns(spy: MatplotlibSpy) -> None:
 
     Visualizer.bar_apr(df, title="Headline", show=False)
 
-    bar_call = spy.get_call("bar")
+    bar_call = spy.get_call("barh")
     assert bar_call[1][0] == ["Pool A", "Pool B"]
     assert bar_call[1][1] == [5.0, 8.0]
 
@@ -123,7 +126,8 @@ def test_scatter_tvl_apy_scales_axes_and_annotations(spy: MatplotlibSpy) -> None
 
     annotate_calls = [call for call in spy.calls if call[0] == "annotate"]
     assert len(annotate_calls) == len(df)
-    assert annotate_calls[0][1][0] == "Vault 1"
+    labels = {call[1][0] for call in annotate_calls}
+    assert labels == {"Vault 1", "Vault 2"}
 
 
 def test_line_chart_plots_each_series(spy: MatplotlibSpy) -> None:

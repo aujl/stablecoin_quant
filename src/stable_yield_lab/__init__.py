@@ -22,6 +22,7 @@ from .sources import (
     CSVSource,
     DataSource,
     DefiLlamaSource,
+    DefiLlamaHistorySource,
     HistoricalCSVSource,
     MorphoSource,
 )
@@ -68,6 +69,7 @@ __all__ = [
     "CSVSource",
     "HistoricalCSVSource",
     "DefiLlamaSource",
+    "DefiLlamaHistorySource",
     "MorphoSource",
     "BeefySource",
     "Metrics",

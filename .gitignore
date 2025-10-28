@@ -28,6 +28,8 @@ dist/
 build/
 *.egg-info/
 
+demo_artifacts/
+
 # Editors/OS
 .vscode/
 .idea/

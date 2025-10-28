@@ -29,17 +29,35 @@ class Visualizer:
         x_col: str = "name",
         y_col: str = "base_apy",
         *,
+        max_bars: int | None = 40,
+        label_max_chars: int = 32,
         save_path: str | None = None,
         show: bool = True,
     ) -> None:
         if df.empty:
             return
+
+        data = df.copy()
+        if max_bars is not None and max_bars > 0 and len(data) > max_bars:
+            data = data.sort_values(y_col, ascending=False).head(max_bars)
+
+        data = data.sort_values(y_col)
+
+        def _shorten(label: object) -> str:
+            text = str(label)
+            if label_max_chars > 0 and len(text) > label_max_chars:
+                return text[: label_max_chars - 1] + "…"
+            return text
+
+        labels = data[x_col].apply(_shorten)
+        heights = data[y_col] * 100.0
+
         plt = Visualizer._plt()
-        plt.figure(figsize=(10, 6))
-        plt.bar(df[x_col], df[y_col] * 100.0)  # percentage
+        height = max(4.0, 0.4 * len(data))
+        plt.figure(figsize=(10, height))
+        plt.barh(labels, heights)
         plt.title(title)
-        plt.ylabel("APY (%)")
-        plt.xticks(rotation=45, ha="right")
+        plt.xlabel("APY (%)")
         plt.tight_layout()
         if save_path:
             plt.savefig(save_path, bbox_inches="tight")
@@ -55,22 +73,35 @@ class Visualizer:
         size_col: str | None = "risk_score",
         annotate: bool = True,
         *,
+        annotate_top_n: int | None = 20,
+        label_max_chars: int = 28,
         save_path: str | None = None,
         show: bool = True,
     ) -> None:
         if df.empty:
             return
+        data = df.copy()
         sizes = None
-        if size_col in df.columns:
+        if size_col in data.columns:
             # scale bubble sizes
-            sizes = (df[size_col].fillna(2.0) * 40).tolist()
+            sizes = (data[size_col].fillna(2.0) * 40).tolist()
         plt = Visualizer._plt()
         plt.figure(figsize=(10, 6))
-        plt.scatter(df[x_col], df[y_col] * 100.0, s=sizes)  # % on y-axis
-        if annotate:
-            for _, row in df.iterrows():
+        plt.scatter(data[x_col], data[y_col] * 100.0, s=sizes)  # % on y-axis
+        if annotate and "name" in data.columns:
+            labels = data
+            if annotate_top_n is not None and annotate_top_n > 0:
+                labels = labels.sort_values(y_col, ascending=False).head(annotate_top_n)
+
+            def _shorten(label: object) -> str:
+                text = str(label)
+                if label_max_chars > 0 and len(text) > label_max_chars:
+                    return text[: label_max_chars - 1] + "…"
+                return text
+
+            for _, row in labels.iterrows():
                 plt.annotate(
-                    str(row.get("name", "")),
+                    _shorten(row.get("name", "")),
                     (row[x_col], row[y_col] * 100.0),
                     textcoords="offset points",
                     xytext=(5, 5),

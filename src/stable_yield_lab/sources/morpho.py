@@ -54,20 +54,61 @@ class MorphoSource:
         except Exception as exc:  # pragma: no cover - network errors
             logger.warning("Morpho request failed: %s", exc)
             return []
+
+        if not isinstance(raw, dict):
+            logger.warning("Morpho response is not a JSON object: %r", raw)
+            return []
+
+        data = raw.get("data") or {}
+        if not isinstance(data, dict):
+            logger.warning("Morpho 'data' field has unexpected type: %r", type(data))
+            return []
+
+        markets = data.get("markets") or {}
+        if isinstance(markets, dict):
+            items = markets.get("items", [])
+        else:
+            logger.warning("Morpho 'markets' field has unexpected type: %r", type(markets))
+            items = []
+
+        if not isinstance(items, list):
+            logger.warning("Morpho 'items' field has unexpected type: %r", type(items))
+            items = []
+
         pools: list[Pool] = []
         now = datetime.now(tz=UTC).timestamp()
-        items = raw.get("data", {}).get("markets", {}).get("items", [])
         for item in items:
-            sym = str(item.get("loanAsset", {}).get("symbol", ""))
+            if not isinstance(item, dict):
+                logger.debug("Skipping Morpho item with unexpected type: %r", type(item))
+                continue
+            loan_asset = item.get("loanAsset") or {}
+            collateral_asset = item.get("collateralAsset") or {}
+            state = item.get("state") or {}
+
+            if not all(isinstance(obj, dict) for obj in (loan_asset, collateral_asset, state)):
+                logger.debug("Morpho item missing metadata: %r", item)
+                continue
+
+            sym = str(loan_asset.get("symbol", ""))
             if sym.upper() not in STABLE_TOKENS:
                 continue
+
+            try:
+                supply_apy = float(state.get("supplyApy", 0.0)) / 100.0
+            except (TypeError, ValueError):
+                supply_apy = 0.0
+            try:
+                tvl_usd = float(state.get("supplyAssetsUsd", 0.0))
+            except (TypeError, ValueError):
+                tvl_usd = 0.0
+
             pools.append(
                 Pool(
-                    name=f"{sym}-{item.get('collateralAsset', {}).get('symbol', '')}",
+                    name=f"{sym}-{collateral_asset.get('symbol', '')}",
                     chain="Ethereum",
                     stablecoin=sym,
-                    tvl_usd=float(item.get("state", {}).get("supplyAssetsUsd", 0.0)),
-                    base_apy=float(item.get("state", {}).get("supplyApy", 0.0)) / 100.0,
+                    tvl_usd=tvl_usd,
+                    base_apy=supply_apy,
                     reward_apy=0.0,
                     is_auto=True,
                     source="morpho",

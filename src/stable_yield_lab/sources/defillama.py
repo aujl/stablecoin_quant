@@ -65,5 +65,23 @@ class DefiLlamaSource:
             )
         return pools
 
+    def pool_id_map(self) -> dict[str, str]:
+        """Return a mapping of ``project:symbol`` names to DefiLlama pool IDs."""
+
+        try:
+            raw = self._load()
+        except Exception as exc:  # pragma: no cover - network errors
+            logger.warning("DefiLlama request failed: %s", exc)
+            return {}
+
+        mapping: dict[str, str] = {}
+        for item in raw.get("data", []):
+            name = f"{item.get('project', '')}:{item.get('symbol', '')}".strip(":")
+            pool_id = item.get("pool")
+            if not name or not pool_id:
+                continue
+            mapping[name] = str(pool_id)
+        return mapping
+
 
 __all__ = ["DefiLlamaSource"]

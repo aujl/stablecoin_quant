@@ -9,6 +9,7 @@ from .base import HistoricalCSVSource
 from .beefy import BeefySource
 from .csv import CSVSource
 from .defillama import DefiLlamaSource
+from .defillama_history import DefiLlamaHistorySource
 from .morpho import MorphoSource
 
 
@@ -26,6 +27,7 @@ __all__ = [
     "CSVSource",
     "HistoricalCSVSource",
     "DefiLlamaSource",
+    "DefiLlamaHistorySource",
     "MorphoSource",
     "BeefySource",
 ]
